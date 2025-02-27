@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, Query, Path
 import logging
 import numpy as np
 import uuid
@@ -7,6 +7,7 @@ import base64
 import json
 
 from app.models.responses import FaceAnalysisResponse, ClientInfo
+from app.models.enums import FaceShapeEnum 
 from app.utils.client_info import extract_client_info
 from app.utils.image_processing import validate_image_file, read_image_file
 from app.core.face_detection import get_face_image
@@ -231,29 +232,33 @@ async def get_analysis_status(task_id: str):
 
 @router.get("/face-shapes/{face_shape}/frames", response_model=FaceAnalysisResponse)
 async def get_frames_for_face_shape(
-    face_shape: str,
-    min_price: Optional[float] = Query(None),
-    max_price: Optional[float] = Query(None),
-    limit: int = Query(10),
+    face_shape: FaceShapeEnum = Path(..., description="شکل چهره"),  # استفاده از Enum
+    min_price: Optional[float] = Query(None, description="حداقل قیمت (تومان)"),
+    max_price: Optional[float] = Query(None, description="حداکثر قیمت (تومان)"),
+    limit: int = Query(10, description="حداکثر تعداد فریم‌های پیشنهادی"),
     request: Request = None
 ):
     """
     دریافت فریم‌های پیشنهادی براساس شکل چهره.
     
     این API برای زمانی است که کاربر از قبل شکل چهره خود را می‌داند و فقط نیاز به پیشنهاد فریم دارد.
+    
+    شکل‌های چهره موجود:
+    - OVAL: بیضی
+    - ROUND: گرد
+    - SQUARE: مربعی
+    - HEART: قلبی
+    - OBLONG: کشیده
+    - DIAMOND: لوزی
+    - TRIANGLE: مثلثی
     """
     try:
         # استخراج اطلاعات مرورگر و دستگاه کاربر
-        client_info = getattr(request.state, 'client_info', None) if request else None
+        client_info = extract_client_info(request) if request else None
         client_info_dict = client_info.dict() if client_info else {}
         
-        # تبدیل به حروف بزرگ برای استاندارد‌سازی
-        face_shape = face_shape.upper()
-        
-        # بررسی اعتبار شکل چهره
-        valid_shapes = ["OVAL", "ROUND", "SQUARE", "HEART", "OBLONG", "DIAMOND", "TRIANGLE"]
-        if face_shape not in valid_shapes:
-            raise HTTPException(status_code=400, detail=f"شکل چهره نامعتبر. مقادیر معتبر: {', '.join(valid_shapes)}")
+        # تبدیل به حروف بزرگ برای استاندارد‌سازی (اختیاری - پیش‌فرض در Enum)
+        # face_shape = face_shape.upper()
         
         # ایجاد شناسه کاربر
         user_id = str(uuid.uuid4())
