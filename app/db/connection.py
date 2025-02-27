@@ -1,6 +1,7 @@
 import logging
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from typing import Optional
+import asyncio
 
 from app.config import settings
 
@@ -25,10 +26,23 @@ async def connect_to_mongo() -> AsyncIOMotorDatabase:
         try:
             # اتصال به سرور MongoDB
             logger.info(f"اتصال به MongoDB: {settings.MONGODB_URI}")
-            _client = AsyncIOMotorClient(settings.MONGODB_URI)
             
-            # بررسی اتصال
+            # ایجاد کلاینت با تنظیمات پیشرفته
+            _client = AsyncIOMotorClient(
+                settings.MONGODB_URI,
+                serverSelectionTimeoutMS=10000,  # 10 ثانیه تایم‌اوت برای انتخاب سرور
+                connectTimeoutMS=5000,  # 5 ثانیه تایم‌اوت برای اتصال
+                socketTimeoutMS=30000,  # 30 ثانیه تایم‌اوت برای عملیات سوکت
+                maxPoolSize=10,  # حداکثر تعداد کانکشن‌های هم‌زمان
+                minPoolSize=1,  # حداقل تعداد کانکشن‌ها
+                maxIdleTimeMS=60000,  # حداکثر زمان بیکاری کانکشن‌ها (1 دقیقه)
+                retryWrites=True,  # تلاش مجدد برای عملیات نوشتن
+                retryReads=True     # تلاش مجدد برای عملیات خواندن
+            )
+            
+            # بررسی اتصال با زمان انتظار بیشتر
             await _client.admin.command("ping")
+            
             logger.info("اتصال به MongoDB با موفقیت برقرار شد")
             
             # انتخاب دیتابیس

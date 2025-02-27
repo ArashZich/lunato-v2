@@ -5,7 +5,8 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 
 from app.config import settings
-from app.core.face_analysis import get_recommended_frame_types
+# تغییر واردسازی به فایل جدید
+from app.core.face_shape_data import get_recommended_frame_types
 
 # تنظیمات لاگر
 logger = logging.getLogger(__name__)
@@ -447,3 +448,4 @@ async def get_products_by_category(category_id: int) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"خطا در دریافت محصولات دسته‌بندی {category_id}: {str(e)}")
         return []
+                                           

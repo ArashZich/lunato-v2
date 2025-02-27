@@ -1,3 +1,4 @@
+# app/services/tasks.py
 import logging
 import time
 import numpy as np
@@ -9,9 +10,11 @@ from app.config import settings
 from app.db.repository import save_analysis_result, save_recommendation
 from app.utils.image_processing import base64_to_opencv
 from app.core.face_detection import detect_face
-from app.core.face_analysis import analyze_face_shape, get_recommended_frame_types
-from app.services.classifier import predict_face_shape
-from app.services.woocommerce import get_recommended_frames
+
+# حذف این واردسازی‌ها از سطح بالای فایل
+# from app.core.face_analysis import analyze_face_shape, get_recommended_frame_types
+# from app.services.classifier import predict_face_shape
+# from app.services.woocommerce import get_recommended_frames
 
 # تنظیمات لاگر
 logger = logging.getLogger(__name__)
@@ -102,6 +105,10 @@ async def analyze_face_shape_task(image_data: str, face_coordinates: Dict[str, i
     """
     try:
         logger.info(f"شروع تحلیل شکل چهره برای درخواست {request_id}")
+        
+        # واردسازی تأخیری برای جلوگیری از واردسازی دایره‌ای
+        from app.core.face_analysis import analyze_face_shape, get_recommended_frame_types
+        from app.services.classifier import predict_face_shape
         
         # تبدیل تصویر به فرمت OpenCV
         image = base64_to_opencv(image_data)
@@ -199,11 +206,15 @@ async def match_frames_task(face_shape: str, user_id: str, request_id: str, clie
     try:
         logger.info(f"شروع پیشنهاد فریم برای درخواست {request_id} با شکل چهره {face_shape}")
         
+        # واردسازی تأخیری برای جلوگیری از واردسازی دایره‌ای
+        from app.core.face_analysis import get_recommended_frame_types
+        from app.services.woocommerce import get_recommended_frames
+        
         # دریافت انواع فریم پیشنهادی
         recommended_frame_types = get_recommended_frame_types(face_shape)
         
         # دریافت فریم‌های پیشنهادی از WooCommerce
-        frames_result = get_recommended_frames(face_shape)
+        frames_result = await get_recommended_frames(face_shape)
         
         if not frames_result.get("success", False):
             logger.warning(f"دریافت فریم‌های پیشنهادی ناموفق بود برای درخواست {request_id}: {frames_result.get('message')}")

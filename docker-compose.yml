@@ -13,7 +13,7 @@ services:
       - API_PORT=8000
       - DEBUG=true
       - ENVIRONMENT=development
-      - MONGODB_URI=mongodb://eyeglass_admin:secure_password123@mongo:27018/eyeglass_recommendation?authSource=admin
+      - MONGODB_URI=mongodb://eyeglass_admin:secure_password123@mongo:27017/eyeglass_recommendation?authSource=admin
       - MONGODB_DB_NAME=eyeglass_recommendation
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -21,8 +21,10 @@ services:
       - WOOCOMMERCE_CONSUMER_KEY=ck_818f6ea310b3712583afc0d2f12657ae78440b38
       - WOOCOMMERCE_CONSUMER_SECRET=cs_b9e90f2f44c1f262049c7acda1933610fb182571
     depends_on:
-      - mongo
-      - redis
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   # سرویس Celery Worker برای تشخیص چهره
@@ -32,7 +34,7 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      - MONGODB_URI=mongodb://eyeglass_admin:secure_password123@mongo:27018/eyeglass_recommendation?authSource=admin
+      - MONGODB_URI=mongodb://eyeglass_admin:secure_password123@mongo:27017/eyeglass_recommendation?authSource=admin
       - MONGODB_DB_NAME=eyeglass_recommendation
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -40,8 +42,10 @@ services:
       - WOOCOMMERCE_CONSUMER_KEY=ck_818f6ea310b3712583afc0d2f12657ae78440b38
       - WOOCOMMERCE_CONSUMER_SECRET=cs_b9e90f2f44c1f262049c7acda1933610fb182571
     depends_on:
-      - redis
-      - mongo
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   # سرویس Celery Worker برای تحلیل چهره
@@ -51,7 +55,7 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      - MONGODB_URI=mongodb://eyeglass_admin:secure_password123@mongo:27018/eyeglass_recommendation?authSource=admin
+      - MONGODB_URI=mongodb://eyeglass_admin:secure_password123@mongo:27017/eyeglass_recommendation?authSource=admin
       - MONGODB_DB_NAME=eyeglass_recommendation
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -59,8 +63,10 @@ services:
       - WOOCOMMERCE_CONSUMER_KEY=ck_818f6ea310b3712583afc0d2f12657ae78440b38
       - WOOCOMMERCE_CONSUMER_SECRET=cs_b9e90f2f44c1f262049c7acda1933610fb182571
     depends_on:
-      - redis
-      - mongo
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   # سرویس Celery Worker برای پیشنهاد فریم
@@ -70,7 +76,7 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      - MONGODB_URI=mongodb://eyeglass_admin:secure_password123@mongo:27018/eyeglass_recommendation?authSource=admin
+      - MONGODB_URI=mongodb://eyeglass_admin:secure_password123@mongo:27017/eyeglass_recommendation?authSource=admin
       - MONGODB_DB_NAME=eyeglass_recommendation
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -78,8 +84,10 @@ services:
       - WOOCOMMERCE_CONSUMER_KEY=ck_818f6ea310b3712583afc0d2f12657ae78440b38
       - WOOCOMMERCE_CONSUMER_SECRET=cs_b9e90f2f44c1f262049c7acda1933610fb182571
     depends_on:
-      - redis
-      - mongo
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   # MongoDB با تغییر پورت و تعیین کاربر و رمز عبور
@@ -93,6 +101,12 @@ services:
       - MONGO_INITDB_DATABASE=eyeglass_recommendation
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
   # Redis برای Celery
@@ -100,6 +114,12 @@ services:
     image: redis:7
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
 volumes:

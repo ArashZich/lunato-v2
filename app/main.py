@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 import os
+import asyncio
+import time
 
 from app.config import settings
 from app.api.face_analysis import router as face_analysis_router
@@ -58,8 +60,25 @@ async def startup_event():
     # بررسی و ایجاد دایرکتوری داده در صورت نیاز
     os.makedirs(os.path.dirname(settings.FACE_SHAPE_DATA_PATH), exist_ok=True)
     
-    # اتصال به MongoDB
-    await connect_to_mongo()
+    # اتصال به MongoDB با چند بار تلاش
+    max_retries = 5
+    retry_delay = 5  # ثانیه
+    
+    for attempt in range(max_retries):
+        try:
+            await connect_to_mongo()
+            logging.info("اتصال به MongoDB با موفقیت برقرار شد")
+            break
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logging.warning(f"خطا در اتصال به MongoDB (تلاش {attempt+1}/{max_retries}): {str(e)}")
+                await asyncio.sleep(retry_delay)
+            else:
+                logging.error(f"خطا در اتصال به MongoDB پس از {max_retries} تلاش: {str(e)}")
+                # در حالت آخر می‌توانیم خطا را بالا بفرستیم یا بدون دیتابیس ادامه دهیم
+                # ادامه بدون دیتابیس باعث می‌شود برنامه بالا بیاید اما خطاهای متعدد خواهد داشت
+                # برای تولید واقعی، توصیه می‌شود خطا بالا فرستاده شود
+                raise
 
 
 @app.on_event("shutdown")

@@ -1,5 +1,5 @@
-import os
-from pydantic import BaseSettings, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -12,15 +12,19 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = Field(default="development", env="ENVIRONMENT")
     
     # تنظیمات MongoDB
+    MONGODB_HOST: str = Field(default="mongo", env="MONGODB_HOST")
+    MONGODB_PORT: int = Field(default=27017, env="MONGODB_PORT")
+    MONGODB_USERNAME: str = Field(default="eyeglass_admin", env="MONGODB_USERNAME")
+    MONGODB_PASSWORD: str = Field(default="secure_password123", env="MONGODB_PASSWORD")
+    MONGODB_DB_NAME: str = Field(default="eyeglass_recommendation", env="MONGODB_DB_NAME")
     MONGODB_URI: str = Field(
-        default="mongodb://eyeglass_admin:secure_password123@localhost:27018/eyeglass_recommendation?authSource=admin", 
+        default="mongodb://eyeglass_admin:secure_password123@mongo:27017/eyeglass_recommendation?authSource=admin", 
         env="MONGODB_URI"
     )
-    MONGODB_DB_NAME: str = Field(default="eyeglass_recommendation", env="MONGODB_DB_NAME")
     
     # تنظیمات Celery
-    CELERY_BROKER_URL: str = Field(default="redis://localhost:6379/0", env="CELERY_BROKER_URL")
-    CELERY_RESULT_BACKEND: str = Field(default="redis://localhost:6379/0", env="CELERY_RESULT_BACKEND")
+    CELERY_BROKER_URL: str = Field(default="redis://redis:6379/0", env="CELERY_BROKER_URL")
+    CELERY_RESULT_BACKEND: str = Field(default="redis://redis:6379/0", env="CELERY_RESULT_BACKEND")
     
     # تنظیمات WooCommerce API
     WOOCOMMERCE_API_URL: str = Field(
@@ -59,10 +63,12 @@ class Settings(BaseSettings):
     # تنظیمات ذخیره‌سازی
     STORE_ANALYTICS: bool = Field(default=True, env="STORE_ANALYTICS")
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
 
 # تابع برای دریافت تنظیمات
