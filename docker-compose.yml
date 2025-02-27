@@ -13,7 +13,7 @@ services:
       - API_PORT=8000
       - DEBUG=true
       - ENVIRONMENT=development
-      - MONGODB_URI=mongodb://eyeglass_admin:secure_password123@mongo:27017/eyeglass_recommendation?authSource=admin
+      - MONGODB_URI=mongodb://admin:password@mongo:27020/eyeglass_recommendation?authSource=admin
       - MONGODB_DB_NAME=eyeglass_recommendation
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -34,7 +34,7 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      - MONGODB_URI=mongodb://eyeglass_admin:secure_password123@mongo:27017/eyeglass_recommendation?authSource=admin
+      - MONGODB_URI=mongodb://admin:password@mongo:27020/eyeglass_recommendation?authSource=admin
       - MONGODB_DB_NAME=eyeglass_recommendation
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -55,7 +55,7 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      - MONGODB_URI=mongodb://eyeglass_admin:secure_password123@mongo:27017/eyeglass_recommendation?authSource=admin
+      - MONGODB_URI=mongodb://admin:password@mongo:27020/eyeglass_recommendation?authSource=admin
       - MONGODB_DB_NAME=eyeglass_recommendation
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -76,7 +76,7 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      - MONGODB_URI=mongodb://eyeglass_admin:secure_password123@mongo:27017/eyeglass_recommendation?authSource=admin
+      - MONGODB_URI=mongodb://admin:password@mongo:27020/eyeglass_recommendation?authSource=admin
       - MONGODB_DB_NAME=eyeglass_recommendation
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -94,10 +94,10 @@ services:
   mongo:
     image: mongo:6
     ports:
-      - "27018:27017"
+      - "27020:27020"
     environment:
-      - MONGO_INITDB_ROOT_USERNAME=eyeglass_admin
-      - MONGO_INITDB_ROOT_PASSWORD=secure_password123
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
       - MONGO_INITDB_DATABASE=eyeglass_recommendation
     volumes:
       - mongo_data:/data/db

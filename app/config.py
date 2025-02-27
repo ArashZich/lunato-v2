@@ -13,12 +13,12 @@ class Settings(BaseSettings):
     
     # تنظیمات MongoDB
     MONGODB_HOST: str = Field(default="mongo", env="MONGODB_HOST")
-    MONGODB_PORT: int = Field(default=27017, env="MONGODB_PORT")
+    MONGODB_PORT: int = Field(default=27020, env="MONGODB_PORT")
     MONGODB_USERNAME: str = Field(default="eyeglass_admin", env="MONGODB_USERNAME")
     MONGODB_PASSWORD: str = Field(default="secure_password123", env="MONGODB_PASSWORD")
     MONGODB_DB_NAME: str = Field(default="eyeglass_recommendation", env="MONGODB_DB_NAME")
     MONGODB_URI: str = Field(
-        default="mongodb://eyeglass_admin:secure_password123@mongo:27017/eyeglass_recommendation?authSource=admin", 
+        default="mongodb://eyeglass_admin:secure_password123@mongo:27020/eyeglass_recommendation?authSource=admin", 
         env="MONGODB_URI"
     )
     
