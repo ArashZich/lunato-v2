@@ -13,6 +13,8 @@ from app.api.health import router as health_router
 from app.api.analytics import router as analytics_router
 from app.middleware import client_info_middleware
 from app.db.connection import connect_to_mongo, close_mongo_connection
+from app.services.woocommerce import initialize_product_cache
+from app.db.repository import create_database_indexes, check_and_update_request_analytics
 
 # تنظیمات لاگینگ
 logging.basicConfig(
@@ -28,7 +30,6 @@ create_required_directories()
 # بررسی وجود داشتن فایل داده‌های مرجع
 if not os.path.exists(settings.FACE_SHAPE_DATA_PATH):
     logging.warning(f"فایل داده‌های مرجع شکل صورت در مسیر {settings.FACE_SHAPE_DATA_PATH} یافت نشد!")
-
 
 # ایجاد نمونه برنامه FastAPI
 app = FastAPI(
@@ -73,6 +74,16 @@ async def db_exception_handler(request: Request, call_next: Callable):
         )
 
 
+# میدلور برای ثبت زمان پاسخگویی
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    response.headers["X-Process-Time"] = str(process_time)
+    return response
+
+
 # افزودن روترها
 app.include_router(face_analysis_router, prefix="/api/v1", tags=["تحلیل چهره"])
 app.include_router(health_router, prefix="/api/v1", tags=["سلامت سیستم"])
@@ -98,6 +109,16 @@ async def startup_event():
         try:
             await connect_to_mongo()
             logging.info("اتصال به MongoDB با موفقیت برقرار شد")
+            
+            # ایجاد ایندکس‌های دیتابیس
+            await create_database_indexes()
+            
+            # بررسی و بروزرسانی داده‌های تحلیلی
+            await check_and_update_request_analytics()
+            
+            # راه‌اندازی کش محصولات WooCommerce (در یک تسک جداگانه تا مانع راه‌اندازی سریع سیستم نشود)
+            asyncio.create_task(initialize_product_cache())
+            
             break
         except Exception as e:
             if attempt < max_retries - 1:
@@ -130,6 +151,31 @@ async def root():
         "status": "آنلاین",
         "docs": "/docs"
     }
+
+
+# راه‌اندازی کارگزاری زمان‌بندی‌شده برای بروزرسانی آمارها
+async def start_scheduled_tasks():
+    """شروع کارهای زمان‌بندی‌شده"""
+    
+    async def update_analytics_data():
+        """بروزرسانی دوره‌ای داده‌های تحلیلی"""
+        while True:
+            try:
+                await check_and_update_request_analytics()
+                # اجرای هر 12 ساعت یک‌بار
+                await asyncio.sleep(12 * 60 * 60)
+            except Exception as e:
+                logger.error(f"خطا در بروزرسانی داده‌های تحلیلی: {str(e)}")
+                await asyncio.sleep(60 * 60)  # در صورت خطا، یک ساعت صبر می‌کنیم
+    
+    # شروع تسک در پس‌زمینه
+    asyncio.create_task(update_analytics_data())
+
+
+# راه‌اندازی کارهای زمان‌بندی‌شده در شروع برنامه
+@app.on_event("startup")
+async def start_scheduler():
+    await start_scheduled_tasks()
 
 
 # راه‌اندازی برنامه با uvicorn در صورت اجرای مستقیم این فایل

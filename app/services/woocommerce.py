@@ -3,10 +3,15 @@ import json
 import aiohttp
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
+import asyncio
+import threading
+import time
+import schedule
 
 from app.config import settings
-# تغییر واردسازی به فایل جدید
 from app.core.face_shape_data import get_recommended_frame_types
+from app.db.connection import get_database
+
 
 # تنظیمات لاگر
 logger = logging.getLogger(__name__)
@@ -14,24 +19,169 @@ logger = logging.getLogger(__name__)
 # کش برای محصولات
 product_cache = None
 last_cache_update = None
+refresh_lock = asyncio.Lock()
+update_scheduler = None
+
+# نگهداری وضعیت بروزرسانی
+update_status = {
+    "last_update": None,
+    "in_progress": False,
+    "total_products": 0,
+    "last_error": None
+}
 
 
-async def get_all_products() -> List[Dict[str, Any]]:
+async def initialize_product_cache():
     """
-    دریافت تمام محصولات از WooCommerce API با استفاده از کش.
+    راه‌اندازی اولیه کش محصولات در شروع برنامه
+    """
+    global product_cache, last_cache_update, update_scheduler
+    
+    logger.info("شروع راه‌اندازی اولیه کش محصولات WooCommerce")
+    
+    # بررسی وجود کش در دیتابیس
+    try:
+        db = get_database()
+        cache_record = await db.woocommerce_cache.find_one({"type": "products_cache"})
+        
+        if cache_record and "last_update" in cache_record:
+            # بررسی تازگی کش
+            last_update = cache_record["last_update"]
+            if (datetime.utcnow() - last_update) < timedelta(hours=24):
+                logger.info(f"استفاده از کش موجود در دیتابیس (بروزرسانی آخر: {last_update})")
+                product_cache = cache_record["data"]
+                last_cache_update = last_update
+                update_status["last_update"] = last_update
+                update_status["total_products"] = len(product_cache) if product_cache else 0
+                
+                # راه‌اندازی بروزرسانی خودکار
+                start_scheduled_updates()
+                return
+    except Exception as e:
+        logger.warning(f"خطا در بررسی کش دیتابیس: {str(e)}")
+    
+    # بروزرسانی اولیه
+    await refresh_product_cache(force=True)
+    
+    # راه‌اندازی بروزرسانی خودکار
+    start_scheduled_updates()
+
+
+def start_scheduled_updates():
+    """
+    راه‌اندازی بروزرسانی زمان‌بندی شده محصولات
+    """
+    global update_scheduler
+    
+    # اگر قبلاً راه‌اندازی شده، آن را متوقف کنیم
+    if update_scheduler and update_scheduler.is_alive():
+        return
+    
+    # تنظیم زمان‌بندی بروزرسانی (روزی یکبار در ساعت 3 صبح)
+    def run_scheduler():
+        schedule.every().day.at("03:00").do(run_async_update)
+        
+        while True:
+            schedule.run_pending()
+            # بررسی هر 15 دقیقه
+            time.sleep(900)
+    
+    def run_async_update():
+        logger.info("اجرای زمان‌بندی شده بروزرسانی کش محصولات WooCommerce")
+        asyncio.run(refresh_product_cache(force=True))
+    
+    # اجرای زمان‌بندی در یک ترد جداگانه
+    import time
+    update_scheduler = threading.Thread(target=run_scheduler, daemon=True)
+    update_scheduler.start()
+    
+    logger.info("زمان‌بندی بروزرسانی خودکار محصولات WooCommerce فعال شد (روزی یکبار در ساعت 3 صبح)")
+
+
+async def refresh_product_cache(force=False):
+    """
+    بروزرسانی کش محصولات WooCommerce.
+    
+    Args:
+        force: اجبار به بروزرسانی حتی اگر کش معتبر باشد
+        
+    Returns:
+        bool: نتیجه بروزرسانی
+    """
+    global product_cache, last_cache_update, update_status
+    
+    # بررسی وضعیت فعلی کش
+    if not force and product_cache is not None and last_cache_update is not None:
+        # اگر کمتر از 24 ساعت از آخرین بروزرسانی گذشته باشد، نیازی به بروزرسانی نیست
+        if datetime.utcnow() - last_cache_update < timedelta(hours=24):
+            logger.info("کش محصولات WooCommerce معتبر است و نیاز به بروزرسانی ندارد")
+            return True
+    
+    # از قفل برای جلوگیری از بروزرسانی‌های همزمان استفاده می‌کنیم
+    async with refresh_lock:
+        # بررسی مجدد پس از گرفتن قفل
+        if not force and product_cache is not None and last_cache_update is not None:
+            if datetime.utcnow() - last_cache_update < timedelta(hours=24):
+                return True
+                
+        # تنظیم وضعیت بروزرسانی
+        update_status["in_progress"] = True
+        update_status["last_error"] = None
+        
+        try:
+            logger.info("شروع بروزرسانی کش محصولات WooCommerce")
+            
+            # دریافت محصولات از API
+            products = await fetch_all_woocommerce_products()
+            
+            if not products:
+                logger.error("خطا در دریافت محصولات از WooCommerce API")
+                update_status["in_progress"] = False
+                update_status["last_error"] = "خطا در دریافت محصولات از API"
+                return False
+            
+            # بروزرسانی کش
+            product_cache = products
+            last_cache_update = datetime.utcnow()
+            update_status["last_update"] = last_cache_update
+            update_status["total_products"] = len(products)
+            
+            # ذخیره در دیتابیس
+            try:
+                db = get_database()
+                
+                # حذف رکورد قبلی
+                await db.woocommerce_cache.delete_many({"type": "products_cache"})
+                
+                # افزودن رکورد جدید
+                await db.woocommerce_cache.insert_one({
+                    "type": "products_cache",
+                    "last_update": last_cache_update,
+                    "data": products
+                })
+                
+                logger.info(f"کش محصولات WooCommerce در دیتابیس بروزرسانی شد ({len(products)} محصول)")
+            except Exception as db_error:
+                logger.error(f"خطا در ذخیره کش محصولات در دیتابیس: {str(db_error)}")
+            
+            logger.info(f"بروزرسانی کش محصولات WooCommerce با موفقیت انجام شد ({len(products)} محصول)")
+            update_status["in_progress"] = False
+            return True
+            
+        except Exception as e:
+            logger.error(f"خطا در بروزرسانی کش محصولات WooCommerce: {str(e)}")
+            update_status["in_progress"] = False
+            update_status["last_error"] = str(e)
+            return False
+
+
+async def fetch_all_woocommerce_products() -> List[Dict[str, Any]]:
+    """
+    دریافت تمام محصولات از WooCommerce API.
     
     Returns:
         list: لیست محصولات
     """
-    global product_cache, last_cache_update
-    
-    # استفاده از کش اگر معتبر باشد (کمتر از 1 ساعت)
-    if (product_cache is not None and 
-        last_cache_update is not None and 
-        datetime.utcnow() - last_cache_update < timedelta(hours=1)):
-        logger.info("استفاده از کش محصولات WooCommerce")
-        return product_cache
-    
     try:
         logger.info("دریافت محصولات از WooCommerce API")
         
@@ -56,28 +206,38 @@ async def get_all_products() -> List[Dict[str, Any]]:
                 }
                 
                 # ارسال درخواست
-                async with session.get(api_url, params=params, timeout=30) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.error(f"خطا در WooCommerce API: {response.status} - {error_text}")
-                        break
+                try:
+                    async with session.get(api_url, params=params, timeout=30) as response:
+                        if response.status != 200:
+                            error_text = await response.text()
+                            logger.error(f"خطا در WooCommerce API: {response.status} - {error_text}")
+                            break
+                            
+                        products = await response.json()
                         
-                    products = await response.json()
-                    
-                    if not products:
-                        break
+                        if not products:
+                            break
+                            
+                        all_products.extend(products)
                         
-                    all_products.extend(products)
-                    
-                    # بررسی تعداد محصولات دریافتی
-                    if len(products) < per_page:
-                        break
-                        
-                    page += 1
+                        # بررسی تعداد محصولات دریافتی
+                        if len(products) < per_page:
+                            break
+                            
+                        page += 1
+                except Exception as req_error:
+                    logger.error(f"خطا در ارسال درخواست به WooCommerce API (صفحه {page}): {str(req_error)}")
+                    # کمی صبر کنیم و دوباره تلاش کنیم
+                    await asyncio.sleep(2)
+                    continue
         
-        # به‌روزرسانی کش
-        product_cache = all_products
-        last_cache_update = datetime.utcnow()
+        # پیش‌پردازش محصولات
+        for product in all_products:
+            # افزودن فیلد نوع فریم
+            product["frame_type"] = get_frame_type(product)
+            
+            # افزودن فیلد آیا فریم عینک است
+            product["is_eyeglass_frame"] = is_eyeglass_frame(product)
         
         logger.info(f"دریافت {len(all_products)} محصول از WooCommerce API")
         return all_products
@@ -85,6 +245,27 @@ async def get_all_products() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"خطا در دریافت محصولات از WooCommerce API: {str(e)}")
         return []
+
+
+async def get_all_products() -> List[Dict[str, Any]]:
+    """
+    دریافت تمام محصولات از کش.
+    
+    Returns:
+        list: لیست محصولات
+    """
+    global product_cache, last_cache_update
+    
+    # اگر کش موجود نیست، بروزرسانی کنیم
+    if product_cache is None:
+        await initialize_product_cache()
+    
+    # اگر کش قدیمی است (بیش از 24 ساعت)، بروزرسانی در پس‌زمینه
+    if last_cache_update is None or datetime.utcnow() - last_cache_update > timedelta(hours=24):
+        # بروزرسانی غیرمنتظر
+        asyncio.create_task(refresh_product_cache())
+    
+    return product_cache if product_cache is not None else []
 
 
 def is_eyeglass_frame(product: Dict[str, Any]) -> bool:
@@ -97,6 +278,10 @@ def is_eyeglass_frame(product: Dict[str, Any]) -> bool:
     Returns:
         bool: True اگر محصول فریم عینک باشد
     """
+    # اگر قبلاً محاسبه شده، از آن استفاده کنیم
+    if "is_eyeglass_frame" in product:
+        return product["is_eyeglass_frame"]
+    
     # بررسی دسته‌بندی‌های محصول
     categories = product.get("categories", [])
     for category in categories:
@@ -131,6 +316,10 @@ def get_frame_type(product: Dict[str, Any]) -> str:
     Returns:
         str: نوع فریم
     """
+    # اگر قبلاً محاسبه شده، از آن استفاده کنیم
+    if "frame_type" in product:
+        return product["frame_type"]
+    
     # بررسی ویژگی‌های محصول
     attributes = product.get("attributes", [])
     
@@ -248,6 +437,30 @@ def filter_products_by_price(products: List[Dict[str, Any]], min_price: Optional
     return filtered_products
 
 
+async def get_eyeglass_frames(min_price: Optional[float] = None, max_price: Optional[float] = None) -> List[Dict[str, Any]]:
+    """
+    دریافت همه فریم‌های عینک از کش.
+    
+    Args:
+        min_price: حداقل قیمت (اختیاری)
+        max_price: حداکثر قیمت (اختیاری)
+        
+    Returns:
+        list: لیست فریم‌های عینک
+    """
+    # دریافت محصولات از کش
+    products = await get_all_products()
+    
+    # فیلتر کردن فریم‌های عینک
+    eyeglass_frames = [product for product in products if is_eyeglass_frame(product)]
+    
+    # فیلتر بر اساس قیمت (اگر درخواست شده باشد)
+    if min_price is not None or max_price is not None:
+        eyeglass_frames = filter_products_by_price(eyeglass_frames, min_price, max_price)
+    
+    return eyeglass_frames
+
+
 def sort_products_by_match_score(products: List[Dict[str, Any]], face_shape: str) -> List[Dict[str, Any]]:
     """
     مرتب‌سازی محصولات بر اساس امتیاز تطابق با شکل چهره.
@@ -294,22 +507,15 @@ async def get_recommended_frames(face_shape: str, min_price: Optional[float] = N
                 "message": f"هیچ توصیه فریمی برای شکل چهره {face_shape} موجود نیست"
             }
         
-        # دریافت محصولات از WooCommerce API
-        products = await get_all_products()
+        # دریافت فریم‌های عینک از کش
+        eyeglass_frames = await get_eyeglass_frames(min_price, max_price)
         
-        if not products:
-            logger.error("خطا در دریافت محصولات از WooCommerce API")
+        if not eyeglass_frames:
+            logger.error("خطا در دریافت فریم‌های عینک از کش")
             return {
                 "success": False,
                 "message": "خطا در دریافت فریم‌های موجود"
             }
-        
-        # فیلتر کردن فریم‌های عینک
-        eyeglass_frames = [product for product in products if is_eyeglass_frame(product)]
-        
-        # فیلتر بر اساس قیمت (اگر درخواست شده باشد)
-        if min_price is not None or max_price is not None:
-            eyeglass_frames = filter_products_by_price(eyeglass_frames, min_price, max_price)
         
         # مرتب‌سازی بر اساس امتیاز تطابق
         sorted_frames = sort_products_by_match_score(eyeglass_frames, face_shape)
@@ -317,7 +523,7 @@ async def get_recommended_frames(face_shape: str, min_price: Optional[float] = N
         # تبدیل به فرمت پاسخ مورد نظر
         recommended_frames = []
         for product in sorted_frames[:limit]:
-            frame_type = get_frame_type(product)
+            frame_type = product.get("frame_type", get_frame_type(product))
             match_score = product.get("match_score", 0)
             
             recommended_frames.append({
@@ -351,7 +557,7 @@ async def get_recommended_frames(face_shape: str, min_price: Optional[float] = N
 
 async def get_product_by_id(product_id: int) -> Optional[Dict[str, Any]]:
     """
-    دریافت یک محصول خاص با شناسه.
+    دریافت یک محصول خاص با شناسه از کش.
     
     Args:
         product_id: شناسه محصول
@@ -359,8 +565,17 @@ async def get_product_by_id(product_id: int) -> Optional[Dict[str, Any]]:
     Returns:
         dict: اطلاعات محصول یا None اگر پیدا نشود
     """
+    # دریافت محصولات از کش
+    products = await get_all_products()
+    
+    # جستجوی محصول با شناسه
+    for product in products:
+        if product.get("id") == product_id:
+            return product
+    
+    # اگر در کش پیدا نشد، از API درخواست کنیم
     try:
-        logger.info(f"دریافت اطلاعات محصول با شناسه {product_id}")
+        logger.info(f"دریافت محصول با شناسه {product_id} از WooCommerce API")
         
         # API پارامترها
         api_url = f"{settings.WOOCOMMERCE_API_URL}/{product_id}"
@@ -390,7 +605,7 @@ async def get_product_by_id(product_id: int) -> Optional[Dict[str, Any]]:
 
 async def get_products_by_category(category_id: int) -> List[Dict[str, Any]]:
     """
-    دریافت محصولات یک دسته‌بندی خاص.
+    دریافت محصولات یک دسته‌بندی خاص از کش.
     
     Args:
         category_id: شناسه دسته‌بندی
@@ -398,54 +613,34 @@ async def get_products_by_category(category_id: int) -> List[Dict[str, Any]]:
     Returns:
         list: لیست محصولات
     """
-    try:
-        logger.info(f"دریافت محصولات دسته‌بندی با شناسه {category_id}")
-        
-        # API پارامترها
-        api_url = settings.WOOCOMMERCE_API_URL
-        consumer_key = settings.WOOCOMMERCE_CONSUMER_KEY
-        consumer_secret = settings.WOOCOMMERCE_CONSUMER_SECRET
-        per_page = settings.WOOCOMMERCE_PER_PAGE
-        
-        # مقداردهی اولیه لیست محصولات
-        category_products = []
-        page = 1
-        
-        async with aiohttp.ClientSession() as session:
-            while True:
-                # پارامترهای درخواست
-                params = {
-                    "consumer_key": consumer_key,
-                    "consumer_secret": consumer_secret,
-                    "category": category_id,
-                    "per_page": per_page,
-                    "page": page
-                }
-                
-                # ارسال درخواست
-                async with session.get(api_url, params=params, timeout=30) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        logger.error(f"خطا در WooCommerce API: {response.status} - {error_text}")
-                        break
-                        
-                    products = await response.json()
-                    
-                    if not products:
-                        break
-                        
-                    category_products.extend(products)
-                    
-                    # بررسی تعداد محصولات دریافتی
-                    if len(products) < per_page:
-                        break
-                        
-                    page += 1
-        
-        logger.info(f"دریافت {len(category_products)} محصول از دسته‌بندی {category_id}")
-        return category_products
-        
-    except Exception as e:
-        logger.error(f"خطا در دریافت محصولات دسته‌بندی {category_id}: {str(e)}")
-        return []
-                                           
+    # دریافت محصولات از کش
+    products = await get_all_products()
+    
+    # فیلتر محصولات براساس دسته‌بندی
+    category_products = []
+    for product in products:
+        categories = product.get("categories", [])
+        for category in categories:
+            if category.get("id") == category_id:
+                category_products.append(product)
+                break
+    
+    return category_products
+
+
+async def get_cache_status() -> Dict[str, Any]:
+    """
+    دریافت وضعیت فعلی کش محصولات.
+    
+    Returns:
+        dict: وضعیت کش محصولات
+    """
+    global product_cache, last_cache_update, update_status
+    
+    return {
+        "cache_initialized": product_cache is not None,
+        "total_products": len(product_cache) if product_cache else 0,
+        "last_update": last_cache_update,
+        "update_in_progress": update_status["in_progress"],
+        "last_error": update_status["last_error"]
+    }
