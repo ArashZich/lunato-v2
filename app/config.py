@@ -1,5 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
+import os
+from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -13,12 +15,12 @@ class Settings(BaseSettings):
     
     # تنظیمات MongoDB
     MONGODB_HOST: str = Field(default="mongo", env="MONGODB_HOST")
-    MONGODB_PORT: int = Field(default=27020, env="MONGODB_PORT")
-    MONGODB_USERNAME: str = Field(default="admin", env="MONGODB_USERNAME")
-    MONGODB_PASSWORD: str = Field(default="password", env="MONGODB_PASSWORD")
+    MONGODB_PORT: int = Field(default=27123, env="MONGODB_PORT")
+    MONGODB_USERNAME: str = Field(default="eyeglass_admin", env="MONGODB_USERNAME")
+    MONGODB_PASSWORD: str = Field(default="secure_password123", env="MONGODB_PASSWORD")
     MONGODB_DB_NAME: str = Field(default="eyeglass_recommendation", env="MONGODB_DB_NAME")
-    MONGODB_URI: str = Field(
-        default="mongodb://admin:password@mongo:27020/eyeglass_recommendation?authSource=admin", 
+    MONGODB_URI: Optional[str] = Field(
+        default=None, 
         env="MONGODB_URI"
     )
     
@@ -63,17 +65,39 @@ class Settings(BaseSettings):
     # تنظیمات ذخیره‌سازی
     STORE_ANALYTICS: bool = Field(default=True, env="STORE_ANALYTICS")
     
+    # مسیر فایل‌های آپلود شده
+    UPLOAD_DIR: str = Field(default="uploads", env="UPLOAD_DIR")
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore"
     )
+    
+    def __init__(self, **data):
+        super().__init__(**data)
+        # اگر MONGODB_URI تنظیم نشده باشد، آن را بسازیم
+        if not self.MONGODB_URI:
+            self.MONGODB_URI = f"mongodb://{self.MONGODB_USERNAME}:{self.MONGODB_PASSWORD}@{self.MONGODB_HOST}:{self.MONGODB_PORT}/{self.MONGODB_DB_NAME}?authSource=admin"
+
+
+# ایجاد دایرکتوری‌های مورد نیاز
+def create_required_directories():
+    """ایجاد دایرکتوری‌های مورد نیاز برنامه"""
+    directories = [
+        "data",
+        "uploads"
+    ]
+    
+    for directory in directories:
+        os.makedirs(directory, exist_ok=True)
 
 
 # تابع برای دریافت تنظیمات
 def get_settings() -> Settings:
     """دریافت تنظیمات برنامه"""
+    create_required_directories()
     return Settings()
 
 

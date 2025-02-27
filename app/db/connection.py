@@ -24,15 +24,17 @@ async def connect_to_mongo() -> AsyncIOMotorDatabase:
     
     if _client is None:
         try:
-            # اتصال به سرور MongoDB
-            logger.info(f"اتصال به MongoDB: {settings.MONGODB_URI}")
+            # نمایش اطلاعات اتصال برای اشکال‌زدایی
+            logger.info(f"تلاش برای اتصال به MongoDB با URI: {settings.MONGODB_URI}")
+            logger.info(f"Host: {settings.MONGODB_HOST}, Port: {settings.MONGODB_PORT}")
+            logger.info(f"Username: {settings.MONGODB_USERNAME}, Database: {settings.MONGODB_DB_NAME}")
             
             # ایجاد کلاینت با تنظیمات پیشرفته
             _client = AsyncIOMotorClient(
                 settings.MONGODB_URI,
                 serverSelectionTimeoutMS=10000,  # 10 ثانیه تایم‌اوت برای انتخاب سرور
-                connectTimeoutMS=5000,  # 5 ثانیه تایم‌اوت برای اتصال
-                socketTimeoutMS=30000,  # 30 ثانیه تایم‌اوت برای عملیات سوکت
+                connectTimeoutMS=10000,  # 10 ثانیه تایم‌اوت برای اتصال
+                socketTimeoutMS=45000,  # 45 ثانیه تایم‌اوت برای عملیات سوکت
                 maxPoolSize=10,  # حداکثر تعداد کانکشن‌های هم‌زمان
                 minPoolSize=1,  # حداقل تعداد کانکشن‌ها
                 maxIdleTimeMS=60000,  # حداکثر زمان بیکاری کانکشن‌ها (1 دقیقه)
@@ -41,9 +43,16 @@ async def connect_to_mongo() -> AsyncIOMotorDatabase:
             )
             
             # بررسی اتصال با زمان انتظار بیشتر
-            await _client.admin.command("ping")
-            
-            logger.info("اتصال به MongoDB با موفقیت برقرار شد")
+            try:
+                # اجرای یک دستور ساده برای بررسی اتصال
+                await asyncio.wait_for(_client.admin.command('ping'), timeout=5.0)
+                logger.info("اتصال به MongoDB موفقیت‌آمیز بود!")
+            except asyncio.TimeoutError:
+                logger.error("تایم‌اوت در بررسی اتصال MongoDB")
+                if _client:
+                    _client.close()
+                    _client = None
+                raise TimeoutError("تایم‌اوت در بررسی اتصال MongoDB")
             
             # انتخاب دیتابیس
             _db = _client[settings.MONGODB_DB_NAME]
@@ -67,6 +76,18 @@ async def _create_indices():
     """ایجاد ایندکس‌های مورد نیاز در کالکشن‌ها"""
     if _db:
         try:
+            # بررسی وجود کالکشن‌ها و ایجاد آن‌ها در صورت نیاز
+            collections = await _db.list_collection_names()
+            
+            if "requests" not in collections:
+                await _db.create_collection("requests")
+            
+            if "analysis_results" not in collections:
+                await _db.create_collection("analysis_results")
+                
+            if "recommendations" not in collections:
+                await _db.create_collection("recommendations")
+            
             # ایندکس برای کالکشن درخواست‌ها
             await _db.requests.create_index("request_id", unique=True)
             await _db.requests.create_index("created_at")
