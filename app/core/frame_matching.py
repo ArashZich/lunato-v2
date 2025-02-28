@@ -6,6 +6,8 @@ import asyncio
 from app.config import settings
 from app.core.face_analysis import load_face_shape_data, get_recommended_frame_types
 from app.services.woocommerce import get_recommended_frames
+from app.models.responses import RecommendedFrame
+
 
 # تنظیمات لاگر
 logger = logging.getLogger(__name__)

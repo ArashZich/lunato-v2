@@ -3,6 +3,7 @@ import numpy as np
 import logging
 import os
 from typing import Dict, Any, Tuple, List, Optional
+import mediapipe as mp
 
 from app.config import settings
 
@@ -157,222 +158,230 @@ def detect_face(image: np.ndarray) -> Dict[str, Any]:
 
 
 def detect_face_landmarks(image: np.ndarray, face_coordinates: Dict[str, int]) -> Optional[np.ndarray]:
+    """تشخیص نقاط کلیدی چهره"""
+    try:
+        logger.info("شروع تشخیص نقاط کلیدی چهره...")
+        
+        # استخراج مختصات چهره
+        x, y, w, h = face_coordinates["x"], face_coordinates["y"], face_coordinates["width"], face_coordinates["height"]
+        
+        try:
+            import mediapipe as mp
+            mp_face_mesh = mp.solutions.face_mesh
+            
+            # برش چهره با حاشیه
+            padding = int(w * 0.1)
+            x1 = max(0, x - padding)
+            y1 = max(0, y - padding)
+            x2 = min(image.shape[1], x + w + padding)
+            y2 = min(image.shape[0], y + h + padding)
+            face_img = image[y1:y2, x1:x2]
+            
+            # تبدیل به RGB
+            rgb_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
+            
+            with mp_face_mesh.FaceMesh(
+                static_image_mode=True,
+                max_num_faces=1,
+                refine_landmarks=True,
+                min_detection_confidence=0.5) as face_mesh:
+                
+                results = face_mesh.process(rgb_face)
+                
+                if results.multi_face_landmarks:
+                    landmarks = results.multi_face_landmarks[0].landmark
+                    
+                    # تبدیل مختصات نسبی به مختصات مطلق
+                    face_height, face_width = face_img.shape[:2]
+                    
+                    # انتخاب نقاط کلیدی متناسب با مدل mediapipe
+                    # نقاط اصلی برای تعیین شکل صورت
+                    selected_landmarks = np.array([
+                        # پیشانی
+                        [(landmarks[10].x * face_width + x1), (landmarks[10].y * face_height + y1)],  # پیشانی چپ
+                        [(landmarks[8].x * face_width + x1), (landmarks[8].y * face_height + y1 - h*0.1)],  # وسط پیشانی (بالاتر)
+                        [(landmarks[338].x * face_width + x1), (landmarks[338].y * face_height + y1)],  # پیشانی راست
+                        
+                        # فک
+                        [(landmarks[149].x * face_width + x1), (landmarks[149].y * face_height + y1)],  # فک چپ
+                        [(landmarks[152].x * face_width + x1), (landmarks[152].y * face_height + y1)],  # چانه
+                        [(landmarks[378].x * face_width + x1), (landmarks[378].y * face_height + y1)],  # فک راست
+                        
+                        # گونه‌ها
+                        [(landmarks[116].x * face_width + x1), (landmarks[116].y * face_height + y1)],  # گونه چپ
+                        [(landmarks[168].x * face_width + x1), (landmarks[168].y * face_height + y1)],  # بینی (وسط)
+                        [(landmarks[345].x * face_width + x1), (landmarks[345].y * face_height + y1)]   # گونه راست
+                    ])
+                    
+                    logger.info(f"تشخیص {len(selected_landmarks)} نقطه کلیدی با استفاده از mediapipe")
+                    return selected_landmarks
+                else:
+                    logger.warning("نقاط کلیدی با mediapipe تشخیص داده نشد")
+        except Exception as e:
+            logger.warning(f"خطا در تشخیص با mediapipe: {str(e)}")
+            
+        # در صورت شکست، از نقاط پیش‌فرض استفاده کنیم
+        return _generate_default_landmarks(face_coordinates)
+    except Exception as e:
+        logger.error(f"خطا در تشخیص نقاط کلیدی چهره: {str(e)}")
+        return _generate_default_landmarks(face_coordinates)
+    
+
+def _generate_default_landmarks(face_coordinates: Dict[str, int]) -> np.ndarray:
+    """تولید نقاط کلیدی پیش‌فرض"""
+    x, y, w, h = face_coordinates["x"], face_coordinates["y"], face_coordinates["width"], face_coordinates["height"]
+    
+    # موقعیت‌های عمودی
+    forehead_y = y + h * 0.15
+    middle_y = y + h * 0.5
+    jawline_y = y + h * 0.75
+    chin_y = y + h * 0.9
+    
+    # محاسبه پهنای هر قسمت
+    aspect_ratio = w / h if h > 0 else 1.0
+    
+    if aspect_ratio > 1.05:  # صورت پهن
+        forehead_width = w * 0.75
+        cheek_width = w * 0.85
+        jaw_width = w * 0.7
+    elif aspect_ratio < 0.95:  # صورت کشیده
+        forehead_width = w * 0.6
+        cheek_width = w * 0.7
+        jaw_width = w * 0.65
+    else:  # صورت متعادل
+        forehead_width = w * 0.7
+        cheek_width = w * 0.75
+        jaw_width = w * 0.7
+    
+    # محاسبه موقعیت‌های افقی
+    forehead_left = x + (w - forehead_width) / 2
+    forehead_right = forehead_left + forehead_width
+    
+    cheek_left = x + (w - cheek_width) / 2
+    cheek_right = cheek_left + cheek_width
+    
+    jaw_left = x + (w - jaw_width) / 2
+    jaw_right = jaw_left + jaw_width
+    
+    # ساخت آرایه نقاط کلیدی
+    landmarks = np.array([
+        [forehead_left, forehead_y],    # 0: گوشه بالا چپ پیشانی
+        [x + w/2, y + h * 0.05],        # 1: وسط پیشانی
+        [forehead_right, forehead_y],   # 2: گوشه بالا راست پیشانی
+        [jaw_left, jawline_y],          # 3: گوشه چپ فک
+        [x + w/2, chin_y],              # 4: چانه
+        [jaw_right, jawline_y],         # 5: گوشه راست فک
+        [cheek_left, middle_y],         # 6: گونه چپ
+        [x + w/2, middle_y],            # 7: وسط صورت
+        [cheek_right, middle_y]         # 8: گونه راست
+    ])
+    
+    return landmarks
+
+def _generate_dynamic_landmarks(image: np.ndarray, face_coordinates: Dict[str, int]) -> np.ndarray:
     """
-    تشخیص نقاط کلیدی چهره.
+    تولید نقاط کلیدی پویا براساس محتوای تصویر و مختصات چهره.
+    جایگزین تابع _generate_default_landmarks
     
     Args:
         image: تصویر OpenCV
         face_coordinates: مختصات چهره
         
     Returns:
-        numpy.ndarray: نقاط کلیدی چهره یا None در صورت خطا
-    """
-    try:
-        logger.info("شروع تشخیص نقاط کلیدی چهره...")
-        
-        # بارگیری مدل تشخیص نقاط کلیدی
-        landmark_detector = load_landmark_detector()
-        
-        if landmark_detector is None:
-            logger.warning("مدل تشخیص نقاط کلیدی در دسترس نیست. استفاده از نقاط پیش‌فرض...")
-            # اگر مدل در دسترس نباشد، از نقاط پیش‌فرض استفاده می‌کنیم
-            return _generate_default_landmarks(face_coordinates)
-        
-        # استخراج مختصات چهره
-        x, y, w, h = face_coordinates["x"], face_coordinates["y"], face_coordinates["width"], face_coordinates["height"]
-        
-        # تبدیل تصویر به سیاه و سفید برای تشخیص بهتر
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # بهبود کنتراست تصویر برای تشخیص بهتر نقاط کلیدی
-        try:
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            enhanced_gray = clahe.apply(gray)
-        except Exception as e:
-            logger.warning(f"خطا در بهبود کنتراست تصویر: {str(e)}")
-            enhanced_gray = gray
-        
-        # تشخیص نقاط کلیدی بسته به نوع مدل
-        if str(type(landmark_detector)).find("dlib") != -1:
-            # استفاده از dlib
-            try:
-                import dlib
-                rect = dlib.rectangle(x, y, x + w, y + h)
-                shape = landmark_detector(enhanced_gray, rect)
-                
-                # تبدیل به آرایه numpy
-                landmarks = np.array([[p.x, p.y] for p in shape.parts()])
-                
-                # لاگ کردن اطلاعات برای اشکال‌زدایی
-                logger.info(f"تشخیص {len(landmarks)} نقطه کلیدی با استفاده از dlib")
-                
-                # انتخاب نقاط کلیدی مورد نیاز برای تشخیص شکل چهره
-                # اگر تعداد نقاط کافی باشد
-                if len(landmarks) >= 68:  # نقاط کلیدی استاندارد dlib
-                    selected_landmarks = np.array([
-                        landmarks[16],   # گوشه راست پیشانی
-                        landmarks[27],   # وسط پیشانی
-                        landmarks[0],    # گوشه چپ پیشانی
-                        landmarks[4],    # گوشه چپ فک
-                        landmarks[8],    # چانه
-                        landmarks[12],   # گوشه راست فک
-                        landmarks[1],    # گونه چپ
-                        landmarks[30],   # وسط صورت (بینی)
-                        landmarks[15]    # گونه راست
-                    ])
-                    return selected_landmarks
-                
-                # اگر تعداد نقاط کمتر از انتظار باشد، همه را برگردان
-                return landmarks
-                
-            except Exception as dlib_error:
-                logger.warning(f"خطا در استفاده از dlib برای تشخیص نقاط کلیدی: {str(dlib_error)}")
-                
-        else:
-            # استفاده از OpenCV
-            try:
-                faces = [np.array([x, y, x + w, y + h])]
-                success, landmarks = landmark_detector.fit(enhanced_gray, faces)
-                
-                if not success or len(landmarks) == 0:
-                    logger.warning("خطا در تشخیص نقاط کلیدی با OpenCV")
-                    return _generate_default_landmarks(face_coordinates)
-                    
-                # استخراج نقاط
-                landmarks = landmarks[0][0]
-                
-                # لاگ کردن اطلاعات برای اشکال‌زدایی
-                logger.info(f"تشخیص {len(landmarks)} نقطه کلیدی با استفاده از OpenCV")
-                
-                # انتخاب نقاط کلیدی مورد نیاز برای تشخیص شکل چهره
-                if len(landmarks) >= 20:  # نقاط کلیدی استاندارد OpenCV LBF
-                    selected_landmarks = np.array([
-                        landmarks[16],   # گوشه راست پیشانی
-                        landmarks[19],   # وسط پیشانی
-                        landmarks[0],    # گوشه چپ پیشانی
-                        landmarks[3],    # گوشه چپ فک
-                        landmarks[8],    # چانه
-                        landmarks[13],   # گوشه راست فک
-                        landmarks[5],    # گونه چپ
-                        landmarks[10],   # وسط صورت 
-                        landmarks[11]    # گونه راست
-                    ])
-                    return selected_landmarks
-                
-                # اگر تعداد نقاط کمتر از انتظار باشد، همه را برگردان
-                return landmarks
-                
-            except Exception as cv_error:
-                logger.warning(f"خطا در استفاده از OpenCV برای تشخیص نقاط کلیدی: {str(cv_error)}")
-        
-        # در صورت بروز خطا، از نقاط پیش‌فرض استفاده می‌کنیم
-        logger.info("استفاده از نقاط کلیدی پیش‌فرض به دلیل خطا در تشخیص...")
-        return _generate_default_landmarks(face_coordinates)
-        
-    except Exception as e:
-        logger.error(f"خطا در تشخیص نقاط کلیدی چهره: {str(e)}")
-        # استفاده از نقاط کلیدی پیش‌فرض در صورت بروز خطا
-        return _generate_default_landmarks(face_coordinates)
-
-
-def _generate_default_landmarks(face_coordinates: Dict[str, int]) -> np.ndarray:
-    """
-    تولید نقاط کلیدی پیش‌فرض براساس مختصات چهره.
-    
-    این تابع در صورت عدم موفقیت در تشخیص نقاط کلیدی با استفاده از مدل، 
-    نقاط کلیدی اصلی را براساس مختصات چهره تولید می‌کند.
-    
-    Args:
-        face_coordinates: مختصات چهره
-        
-    Returns:
-        numpy.ndarray: نقاط کلیدی پیش‌فرض
+        numpy.ndarray: نقاط کلیدی پویا
     """
     x, y, w, h = face_coordinates["x"], face_coordinates["y"], face_coordinates["width"], face_coordinates["height"]
     
     # لاگ کردن محدوده چهره برای اشکال‌زدایی
-    logger.debug(f"تولید نقاط کلیدی پیش‌فرض برای چهره در محدوده: x={x}, y={y}, w={w}, h={h}")
+    logger.debug(f"تولید نقاط کلیدی پویا برای چهره در محدوده: x={x}, y={y}, w={w}, h={h}")
     
     # محاسبه نسبت ابعاد چهره برای بهبود تشخیص
     aspect_ratio = face_coordinates.get("aspect_ratio", w / h if h > 0 else 1.0)
     logger.debug(f"نسبت ابعاد چهره: {aspect_ratio:.2f}")
     
-    # تنظیم نقاط کلیدی بر اساس نسبت ابعاد چهره
-    # برای چهره‌های مختلف، نقاط پیش‌فرض متفاوتی تولید می‌کنیم
+    # برش تصویر چهره برای آنالیز
+    face_img = image[y:y+h, x:x+w]
+    gray_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY) if len(face_img.shape) == 3 else face_img
     
-    # موقعیت‌های عمودی استاندارد
-    forehead_y = y + h * 0.15    # خط پیشانی (15% از بالای چهره)
-    eyes_y = y + h * 0.3         # خط چشم‌ها (30% از بالای چهره)
-    middle_y = y + h * 0.5       # خط میانی صورت (50% از بالای چهره)
-    jawline_y = y + h * 0.75     # خط فک (75% از بالای چهره)
-    chin_y = y + h * 0.9         # خط چانه (90% از بالای چهره)
+    # استفاده از هیستوگرام برای تشخیص روشنایی نواحی مختلف
+    # تقسیم تصویر به 3 بخش عمودی
+    h_face, w_face = gray_face.shape
+    top_region = gray_face[0:int(h_face*0.33), :]
+    middle_region = gray_face[int(h_face*0.33):int(h_face*0.66), :]
+    bottom_region = gray_face[int(h_face*0.66):, :]
     
-    # برای چهره‌های با نسبت ابعاد بالا (چهره‌های پهن‌تر)
-    if aspect_ratio > 1.1:
-        # تنظیم موقعیت‌های افقی برای چهره‌های پهن
-        forehead_left = x + w * 0.15
-        forehead_right = x + w * 0.85
-        jaw_left = x + w * 0.2
-        jaw_right = x + w * 0.8
-        cheek_left = x + w * 0.25
-        cheek_right = x + w * 0.75
-        
-        landmarks = np.array([
-            [forehead_left, forehead_y],    # 0: گوشه بالا چپ پیشانی
-            [x + w * 0.5, y + h * 0.05],    # 1: وسط پیشانی (کمی بالاتر)
-            [forehead_right, forehead_y],   # 2: گوشه بالا راست پیشانی
-            [jaw_left, jawline_y],          # 3: گوشه چپ فک
-            [x + w * 0.5, chin_y],          # 4: چانه
-            [jaw_right, jawline_y],         # 5: گوشه راست فک
-            [cheek_left, middle_y],         # 6: گونه چپ
-            [x + w * 0.5, middle_y],        # 7: وسط صورت
-            [cheek_right, middle_y]         # 8: گونه راست
-        ])
-    # برای چهره‌های با نسبت ابعاد پایین (چهره‌های کشیده‌تر)
-    elif aspect_ratio < 0.9:
-        # تنظیم موقعیت‌های افقی برای چهره‌های کشیده
-        forehead_left = x + w * 0.25
-        forehead_right = x + w * 0.75
-        jaw_left = x + w * 0.3
-        jaw_right = x + w * 0.7
-        cheek_left = x + w * 0.35
-        cheek_right = x + w * 0.65
-        
-        landmarks = np.array([
-            [forehead_left, forehead_y],    # 0: گوشه بالا چپ پیشانی
-            [x + w * 0.5, y + h * 0.05],    # 1: وسط پیشانی (کمی بالاتر)
-            [forehead_right, forehead_y],   # 2: گوشه بالا راست پیشانی
-            [jaw_left, jawline_y],          # 3: گوشه چپ فک
-            [x + w * 0.5, chin_y],          # 4: چانه
-            [jaw_right, jawline_y],         # 5: گوشه راست فک
-            [cheek_left, middle_y],         # 6: گونه چپ
-            [x + w * 0.5, middle_y],        # 7: وسط صورت
-            [cheek_right, middle_y]         # 8: گونه راست
-        ])
-    # برای چهره‌های با نسبت ابعاد متوسط (بیضی یا گرد)
-    else:
-        # تنظیم موقعیت‌های افقی برای چهره‌های متوسط
-        forehead_left = x + w * 0.2
-        forehead_right = x + w * 0.8
-        jaw_left = x + w * 0.25
-        jaw_right = x + w * 0.75
-        cheek_left = x + w * 0.3
-        cheek_right = x + w * 0.7
-        
-        landmarks = np.array([
-            [forehead_left, forehead_y],    # 0: گوشه بالا چپ پیشانی
-            [x + w * 0.5, y + h * 0.05],    # 1: وسط پیشانی (کمی بالاتر)
-            [forehead_right, forehead_y],   # 2: گوشه بالا راست پیشانی
-            [jaw_left, jawline_y],          # 3: گوشه چپ فک
-            [x + w * 0.5, chin_y],          # 4: چانه
-            [jaw_right, jawline_y],         # 5: گوشه راست فک
-            [cheek_left, middle_y],         # 6: گونه چپ
-            [x + w * 0.5, middle_y],        # 7: وسط صورت
-            [cheek_right, middle_y]         # 8: گونه راست
-        ])
+    # محاسبه میانگین روشنایی هر ناحیه
+    top_brightness = np.mean(top_region)
+    middle_brightness = np.mean(middle_region)
+    bottom_brightness = np.mean(bottom_region)
     
-    # لاگ کردن نقاط کلیدی جدید برای اشکال‌زدایی
-    logger.debug(f"نقاط کلیدی پیش‌فرض تولید شده بر اساس نسبت ابعاد {aspect_ratio:.2f}")
+    # تنظیم نسبت‌های پویا بر اساس شکل و روشنایی
+    # پارامترهای تشخیص شکل چهره
+    if aspect_ratio > 1.1:  # چهره پهن
+        width_ratio = 0.8
+        forehead_ratio = 1.0 + (top_brightness / middle_brightness - 1) * 0.2
+        jaw_ratio = 1.0 + (bottom_brightness / middle_brightness - 1) * 0.2
+        logger.debug("تشخیص چهره پهن")
+    elif aspect_ratio < 0.9:  # چهره کشیده
+        width_ratio = 0.65
+        forehead_ratio = 0.95 + (top_brightness / middle_brightness - 1) * 0.1
+        jaw_ratio = 0.95 + (bottom_brightness / middle_brightness - 1) * 0.1
+        logger.debug("تشخیص چهره کشیده")
+    else:  # چهره متعادل
+        width_ratio = 0.7
+        forehead_ratio = 1.0 + (top_brightness / middle_brightness - 1) * 0.15
+        jaw_ratio = 1.0 + (bottom_brightness / middle_brightness - 1) * 0.15
+        logger.debug("تشخیص چهره متعادل")
+    
+    # محدود کردن مقادیر به بازه منطقی
+    forehead_ratio = max(0.9, min(1.2, forehead_ratio))
+    jaw_ratio = max(0.8, min(1.2, jaw_ratio))
+    
+    # محاسبه مختصات نقاط کلیدی
+    # موقعیت‌های عمودی
+    forehead_y = y + int(h * 0.15)   # خط پیشانی
+    middle_y = y + int(h * 0.5)      # خط میانی
+    jawline_y = y + int(h * 0.75)    # خط فک
+    chin_y = y + int(h * 0.9)        # خط چانه
+    
+    # عرض در هر ارتفاع
+    forehead_width = w * width_ratio * forehead_ratio
+    cheek_width = w * width_ratio
+    jaw_width = w * width_ratio * jaw_ratio
+    
+    # محاسبه موقعیت‌های افقی
+    forehead_left = x + (w - forehead_width) / 2
+    forehead_right = forehead_left + forehead_width
+    
+    cheek_left = x + (w - cheek_width) / 2
+    cheek_right = cheek_left + cheek_width
+    
+    jaw_left = x + (w - jaw_width) / 2
+    jaw_right = jaw_left + jaw_width
+    
+    # ساخت آرایه نقاط کلیدی
+    landmarks = np.array([
+        [forehead_left, forehead_y],  # 0: گوشه بالا چپ پیشانی
+        [x + w/2, y + h * 0.05],      # 1: وسط پیشانی
+        [forehead_right, forehead_y],  # 2: گوشه بالا راست پیشانی
+        [jaw_left, jawline_y],        # 3: گوشه چپ فک
+        [x + w/2, chin_y],            # 4: چانه
+        [jaw_right, jawline_y],       # 5: گوشه راست فک
+        [cheek_left, middle_y],       # 6: گونه چپ
+        [x + w/2, middle_y],          # 7: وسط صورت
+        [cheek_right, middle_y]       # 8: گونه راست
+    ])
+    
+    # محاسبه نسبت‌های مهم برای استفاده در تشخیص شکل چهره
+    forehead_width_calc = np.linalg.norm(landmarks[0] - landmarks[2])
+    cheekbone_width = np.linalg.norm(landmarks[6] - landmarks[8])
+    jawline_width = np.linalg.norm(landmarks[3] - landmarks[5])
+    
+    forehead_to_cheekbone = forehead_width_calc / cheekbone_width if cheekbone_width > 0 else 1.0
+    cheekbone_to_jaw = cheekbone_width / jawline_width if jawline_width > 0 else 1.0
+    
+    logger.debug(f"نسبت عرض پیشانی به عرض گونه (پویا): {forehead_to_cheekbone:.2f}")
+    logger.debug(f"نسبت عرض گونه به عرض فک (پویا): {cheekbone_to_jaw:.2f}")
     
     return landmarks
 
