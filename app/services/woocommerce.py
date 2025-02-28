@@ -1,7 +1,7 @@
 import logging
 import json
 import aiohttp
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 import asyncio
 import threading
@@ -57,6 +57,10 @@ async def initialize_product_cache():
                 # راه‌اندازی بروزرسانی خودکار
                 start_scheduled_updates()
                 return
+            else:
+                logger.info("کش محصولات در دیتابیس منقضی شده است. نیاز به بروزرسانی دارد.")
+        else:
+            logger.info("کش محصولات در دیتابیس یافت نشد. در حال دانلود محصولات از WooCommerce...")
     except Exception as e:
         logger.warning(f"خطا در بررسی کش دیتابیس: {str(e)}")
     
@@ -129,7 +133,7 @@ async def refresh_product_cache(force=False):
         update_status["last_error"] = None
         
         try:
-            logger.info("شروع بروزرسانی کش محصولات WooCommerce")
+            logger.info("شروع فرآیند دانلود و بروزرسانی کش محصولات از WooCommerce API")
             
             # دریافت محصولات از API
             products = await fetch_all_woocommerce_products()
@@ -146,21 +150,14 @@ async def refresh_product_cache(force=False):
             update_status["last_update"] = last_cache_update
             update_status["total_products"] = len(products)
             
-            # ذخیره در دیتابیس
+            logger.info(f"دانلود محصولات از WooCommerce API با موفقیت انجام شد. تعداد محصولات: {len(products)}")
+            
+            # ذخیره در دیتابیس با روش جدید چند بخشی
             try:
-                db = get_database()
-                
-                # حذف رکورد قبلی
-                await db.woocommerce_cache.delete_many({"type": "products_cache"})
-                
-                # افزودن رکورد جدید
-                await db.woocommerce_cache.insert_one({
-                    "type": "products_cache",
-                    "last_update": last_cache_update,
-                    "data": products
-                })
-                
-                logger.info(f"کش محصولات WooCommerce در دیتابیس بروزرسانی شد ({len(products)} محصول)")
+                logger.info("در حال ذخیره محصولات دانلود شده در دیتابیس...")
+                success = await save_woocommerce_cache(products, last_cache_update)
+                if not success:
+                    logger.warning("ذخیره کش محصولات در دیتابیس با مشکل مواجه شد")
             except Exception as db_error:
                 logger.error(f"خطا در ذخیره کش محصولات در دیتابیس: {str(db_error)}")
             
@@ -183,7 +180,7 @@ async def fetch_all_woocommerce_products() -> List[Dict[str, Any]]:
         list: لیست محصولات
     """
     try:
-        logger.info("دریافت محصولات از WooCommerce API")
+        logger.info("شروع دانلود محصولات از WooCommerce API...")
         
         # API پارامترها
         api_url = settings.WOOCOMMERCE_API_URL
@@ -196,6 +193,7 @@ async def fetch_all_woocommerce_products() -> List[Dict[str, Any]]:
         page = 1
         
         async with aiohttp.ClientSession() as session:
+            logger.info(f"در حال دانلود صفحه 1 از محصولات...")
             while True:
                 # پارامترهای درخواست
                 params = {
@@ -216,21 +214,27 @@ async def fetch_all_woocommerce_products() -> List[Dict[str, Any]]:
                         products = await response.json()
                         
                         if not products:
+                            logger.info(f"دانلود محصولات از WooCommerce API کامل شد. صفحه آخر: {page-1}")
                             break
                             
+                        logger.info(f"دانلود صفحه {page} با {len(products)} محصول انجام شد")
                         all_products.extend(products)
                         
                         # بررسی تعداد محصولات دریافتی
                         if len(products) < per_page:
+                            logger.info(f"دانلود محصولات از WooCommerce API کامل شد. صفحه آخر: {page}")
                             break
                             
                         page += 1
+                        logger.info(f"در حال دانلود صفحه {page} از محصولات...")
                 except Exception as req_error:
                     logger.error(f"خطا در ارسال درخواست به WooCommerce API (صفحه {page}): {str(req_error)}")
                     # کمی صبر کنیم و دوباره تلاش کنیم
+                    logger.info(f"تلاش مجدد برای دانلود صفحه {page} پس از 2 ثانیه...")
                     await asyncio.sleep(2)
                     continue
         
+        logger.info(f"پیش‌پردازش {len(all_products)} محصول دانلود شده...")
         # پیش‌پردازش محصولات
         for product in all_products:
             # افزودن فیلد نوع فریم
@@ -239,7 +243,8 @@ async def fetch_all_woocommerce_products() -> List[Dict[str, Any]]:
             # افزودن فیلد آیا فریم عینک است
             product["is_eyeglass_frame"] = is_eyeglass_frame(product)
         
-        logger.info(f"دریافت {len(all_products)} محصول از WooCommerce API")
+        eyeglass_count = sum(1 for p in all_products if p.get("is_eyeglass_frame", False))
+        logger.info(f"دانلود و پیش‌پردازش {len(all_products)} محصول از WooCommerce API کامل شد. تعداد فریم عینک: {eyeglass_count}")
         return all_products
         
     except Exception as e:
@@ -644,3 +649,96 @@ async def get_cache_status() -> Dict[str, Any]:
         "update_in_progress": update_status["in_progress"],
         "last_error": update_status["last_error"]
     }
+    
+
+async def save_woocommerce_cache(products: List[Dict[str, Any]], last_update: datetime) -> bool:
+    """
+    ذخیره کش محصولات WooCommerce در دیتابیس به صورت چند بخشی.
+    
+    Args:
+        products: لیست محصولات
+        last_update: زمان آخرین بروزرسانی
+        
+    Returns:
+        bool: نتیجه عملیات ذخیره‌سازی
+    """
+    try:
+        db = get_database()
+        
+        # حذف تمام رکوردهای قبلی مرتبط با کش
+        logger.info("حذف رکوردهای قبلی کش از دیتابیس...")
+        await db.woocommerce_cache.delete_many({"type": {"$regex": "^products_cache"}})
+        
+        # تعیین اندازه هر بخش (300 محصول در هر بخش)
+        chunk_size = 300
+        chunks = [products[i:i + chunk_size] for i in range(0, len(products), chunk_size)]
+        
+        logger.info(f"تقسیم {len(products)} محصول به {len(chunks)} بخش (هر بخش حداکثر {chunk_size} محصول)")
+        
+        # ذخیره هر بخش به صورت جداگانه
+        for i, chunk in enumerate(chunks):
+            await db.woocommerce_cache.insert_one({
+                "type": f"products_cache_chunk_{i}",
+                "chunk_index": i,
+                "total_chunks": len(chunks),
+                "last_update": last_update,
+                "data": chunk
+            })
+            logger.info(f"بخش {i+1} از {len(chunks)} با {len(chunk)} محصول ذخیره شد")
+        
+        # ذخیره متادیتا
+        await db.woocommerce_cache.insert_one({
+            "type": "products_cache_meta",
+            "last_update": last_update,
+            "total_products": len(products),
+            "total_chunks": len(chunks),
+            "chunk_size": chunk_size,
+            "eyeglass_frames_count": sum(1 for p in products if p.get("is_eyeglass_frame", False))
+        })
+        
+        logger.info(f"کش محصولات WooCommerce با موفقیت در دیتابیس ذخیره شد ({len(products)} محصول در {len(chunks)} بخش)")
+        return True
+        
+    except Exception as e:
+        logger.error(f"خطا در ذخیره کش محصولات در دیتابیس: {str(e)}")
+        return False
+
+
+async def get_woocommerce_cache() -> Tuple[Optional[List[Dict[str, Any]]], Optional[datetime]]:
+    """
+    دریافت کش محصولات WooCommerce از دیتابیس.
+    
+    Returns:
+        tuple: (محصولات، تاریخ_آخرین_بروزرسانی) یا (None, None) در صورت عدم وجود کش
+    """
+    try:
+        db = get_database()
+        
+        # دریافت متادیتای کش
+        meta = await db.woocommerce_cache.find_one({"type": "products_cache_meta"})
+        
+        if not meta:
+            logger.warning("متادیتای کش محصولات در دیتابیس یافت نشد")
+            return None, None
+        
+        total_chunks = meta.get("total_chunks", 0)
+        last_update = meta.get("last_update")
+        
+        # دریافت تمام بخش‌ها
+        all_products = []
+        for i in range(total_chunks):
+            chunk = await db.woocommerce_cache.find_one({"type": f"products_cache_chunk_{i}"})
+            if chunk and "data" in chunk:
+                all_products.extend(chunk["data"])
+                logger.debug(f"بخش {i+1} از {total_chunks} با {len(chunk['data'])} محصول بازیابی شد")
+        
+        if not all_products:
+            logger.warning("داده‌های کش محصولات در دیتابیس یافت نشد")
+            return None, None
+        
+        logger.info(f"{len(all_products)} محصول از کش دیتابیس بازیابی شد")
+        return all_products, last_update
+        
+    except Exception as e:
+        logger.error(f"خطا در دریافت کش محصولات از دیتابیس: {str(e)}")
+        return None, None
