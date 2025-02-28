@@ -49,7 +49,7 @@ async def connect_to_mongo() -> AsyncIOMotorDatabase:
                 logger.info("اتصال به MongoDB موفقیت‌آمیز بود!")
             except asyncio.TimeoutError:
                 logger.error("تایم‌اوت در بررسی اتصال MongoDB")
-                if _client:
+                if _client is not None:
                     _client.close()
                     _client = None
                 raise TimeoutError("تایم‌اوت در بررسی اتصال MongoDB")
@@ -64,17 +64,22 @@ async def connect_to_mongo() -> AsyncIOMotorDatabase:
             
         except Exception as e:
             logger.error(f"خطا در اتصال به MongoDB: {str(e)}")
-            if _client:
+            if _client is not None:
                 _client.close()
                 _client = None
             raise
     else:
-        return _db
+        # اصلاح شده: به جای بررسی مستقیم _db، از is not None استفاده می‌کنیم
+        if _db is not None:
+            return _db
+        else:
+            _db = _client[settings.MONGODB_DB_NAME]
+            return _db
 
 
 async def _create_indices():
     """ایجاد ایندکس‌های مورد نیاز در کالکشن‌ها"""
-    if _db:
+    if _db is not None:  # اصلاح شده: بررسی با is not None
         try:
             # بررسی وجود کالکشن‌ها و ایجاد آن‌ها در صورت نیاز
             collections = await _db.list_collection_names()
@@ -116,7 +121,7 @@ def get_database() -> AsyncIOMotorDatabase:
     Returns:
         AsyncIOMotorDatabase: دیتابیس MongoDB
     """
-    if _db is None:
+    if _db is None:  # اصلاح شده: بررسی با is None
         raise RuntimeError("اتصال به MongoDB برقرار نشده است. ابتدا تابع connect_to_mongo را فراخوانی کنید.")
     return _db
 
@@ -125,7 +130,7 @@ async def close_mongo_connection():
     """بستن اتصال به MongoDB"""
     global _client, _db
     
-    if _client:
+    if _client is not None:  # اصلاح شده: بررسی با is not None
         logger.info("در حال بستن اتصال MongoDB...")
         _client.close()
         _client = None
