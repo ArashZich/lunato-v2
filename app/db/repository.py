@@ -123,17 +123,6 @@ async def save_recommendation(
 ) -> str:
     """
     ذخیره پیشنهادات فریم در دیتابیس.
-    
-    Args:
-        user_id: شناسه کاربر
-        face_shape: شکل چهره
-        recommended_frame_types: انواع فریم پیشنهادی
-        recommended_frames: فریم‌های پیشنهادی
-        client_info: اطلاعات کاربر
-        analysis_id: شناسه تحلیل (اختیاری)
-        
-    Returns:
-        str: شناسه رکورد ایجاد شده
     """
     # بررسی وضعیت ذخیره‌سازی اطلاعات تحلیلی
     if not settings.STORE_ANALYTICS:
@@ -142,20 +131,36 @@ async def save_recommendation(
     try:
         db = get_database()
         
+        # تبدیل مدل‌های Pydantic به دیکشنری
+        frame_data = []
+        for frame in recommended_frames:
+            try:
+                # اگر شیء دارای متد dict است از آن استفاده کنیم
+                if hasattr(frame, 'dict'):
+                    frame_dict = frame.dict()
+                # اگر یک دیکشنری است، از آن به طور مستقیم استفاده کنیم
+                elif isinstance(frame, dict):
+                    frame_dict = frame
+                else:
+                    # تبدیل دستی به دیکشنری اگر نوع دیگری باشد
+                    frame_dict = {
+                        "id": getattr(frame, "id", None),
+                        "name": getattr(frame, "name", ""),
+                        "frame_type": getattr(frame, "frame_type", ""),
+                        "match_score": getattr(frame, "match_score", 0)
+                    }
+                
+                frame_data.append(frame_dict)
+            except Exception as e:
+                logger.warning(f"خطا در تبدیل فریم برای ذخیره در دیتابیس: {str(e)}")
+                continue
+        
         # ساخت داده پیشنهاد
         recommendation_data = {
             "user_id": user_id,
             "face_shape": face_shape,
             "recommended_frame_types": recommended_frame_types,
-            "recommended_frames": [
-                {
-                    "id": frame.get("id"),
-                    "name": frame.get("name"),
-                    "frame_type": frame.get("frame_type"),
-                    "match_score": frame.get("match_score")
-                }
-                for frame in recommended_frames
-            ],
+            "recommended_frames": frame_data,
             "client_info": client_info,
             "analysis_id": analysis_id,
             "created_at": datetime.utcnow()
@@ -167,7 +172,7 @@ async def save_recommendation(
         return str(result.inserted_id)
         
     except Exception as e:
-        logger.error(f"خطا در ذخیره پیشنهادات: {e}")
+        logger.error(f"خطا در ذخیره پیشنهادات: {str(e)}")
         return str(uuid.uuid4())
 
 

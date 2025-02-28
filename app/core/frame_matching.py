@@ -21,15 +21,6 @@ async def match_frames_to_face_shape(
 ) -> Dict[str, Any]:
     """
     یافتن فریم‌های مناسب برای شکل چهره.
-    
-    Args:
-        face_shape: شکل چهره
-        min_price: حداقل قیمت (اختیاری)
-        max_price: حداکثر قیمت (اختیاری)
-        limit: حداکثر تعداد فریم‌های پیشنهادی
-        
-    Returns:
-        dict: نتیجه جستجوی فریم‌های مناسب
     """
     try:
         logger.info(f"تطبیق فریم‌های مناسب برای شکل چهره {face_shape}")
@@ -67,15 +58,6 @@ async def get_combined_result(
 ) -> Dict[str, Any]:
     """
     دریافت نتیجه ترکیبی شامل اطلاعات شکل چهره و فریم‌های پیشنهادی.
-    
-    Args:
-        face_shape: شکل چهره
-        min_price: حداقل قیمت (اختیاری)
-        max_price: حداکثر قیمت (اختیاری)
-        limit: حداکثر تعداد فریم‌های پیشنهادی
-        
-    Returns:
-        dict: نتیجه ترکیبی
     """
     try:
         logger.info(f"دریافت نتیجه ترکیبی برای شکل چهره {face_shape}")
@@ -106,7 +88,38 @@ async def get_combined_result(
         
         # اگر دریافت فریم‌ها موفقیت‌آمیز بود، افزودن فریم‌ها به نتیجه
         if frames_result.get("success", False):
-            result["recommended_frames"] = frames_result.get("recommended_frames", [])
+            # تبدیل دیکشنری‌ها به مدل Pydantic
+            from app.models.responses import RecommendedFrame
+            
+            recommended_frames_dicts = frames_result.get("recommended_frames", [])
+            recommended_frames = []
+            
+            for frame_dict in recommended_frames_dicts:
+                try:
+                    # مطمئن شویم که regular_price یک string است یا None
+                    regular_price = frame_dict.get("regular_price")
+                    if regular_price is False or regular_price is True:
+                        regular_price = None
+                    elif regular_price is not None:
+                        regular_price = str(regular_price)
+                        
+                    recommended_frame = RecommendedFrame(
+                        id=frame_dict.get("id"),
+                        name=frame_dict.get("name"),
+                        permalink=frame_dict.get("permalink"),
+                        price=str(frame_dict.get("price", "")),
+                        regular_price=regular_price,
+                        frame_type=frame_dict.get("frame_type"),
+                        images=frame_dict.get("images", []),
+                        match_score=frame_dict.get("match_score")
+                    )
+                    recommended_frames.append(recommended_frame)
+                except Exception as e:
+                    logger.warning(f"خطا در تبدیل فریم به مدل Pydantic: {str(e)}")
+                    # استفاده از دیکشنری اصلی در صورت خطا
+                    recommended_frames.append(frame_dict)
+            
+            result["recommended_frames"] = recommended_frames
             result["total_matches"] = frames_result.get("total_matches", 0)
         else:
             # در صورت خطا، افزودن پیام خطا

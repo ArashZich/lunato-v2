@@ -220,15 +220,15 @@ def detect_face_landmarks(image: np.ndarray, face_coordinates: Dict[str, int]) -
         except Exception as e:
             logger.warning(f"خطا در تشخیص با mediapipe: {str(e)}")
             
-        # در صورت شکست، از نقاط پیش‌فرض استفاده کنیم
-        return _generate_default_landmarks(face_coordinates)
+        # در صورت شکست، از تابع نقاط پویا استفاده کنیم
+        return _generate_dynamic_landmarks(image, face_coordinates)
     except Exception as e:
         logger.error(f"خطا در تشخیص نقاط کلیدی چهره: {str(e)}")
-        return _generate_default_landmarks(face_coordinates)
+        return _generate_dynamic_landmarks(image, face_coordinates)
     
 
-def _generate_default_landmarks(face_coordinates: Dict[str, int]) -> np.ndarray:
-    """تولید نقاط کلیدی پیش‌فرض"""
+def _generate_dynamic_landmarks(image: np.ndarray, face_coordinates: Dict[str, int]) -> np.ndarray:
+    """تولید نقاط کلیدی پویا"""
     x, y, w, h = face_coordinates["x"], face_coordinates["y"], face_coordinates["width"], face_coordinates["height"]
     
     # موقعیت‌های عمودی
@@ -237,33 +237,57 @@ def _generate_default_landmarks(face_coordinates: Dict[str, int]) -> np.ndarray:
     jawline_y = y + h * 0.75
     chin_y = y + h * 0.9
     
-    # محاسبه پهنای هر قسمت
+    # تصویر چهره را برش بزنیم
+    face_img = image[y:y+h, x:x+w]
+    
+    # تبدیل به سیاه و سفید
+    if len(face_img.shape) == 3:
+        gray_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+    else:
+        gray_face = face_img
+    
+    # میانگین روشنایی قسمت‌های مختلف صورت
+    height, width = gray_face.shape
+    top_third = gray_face[:int(height/3), :]
+    middle_third = gray_face[int(height/3):int(2*height/3), :]
+    bottom_third = gray_face[int(2*height/3):, :]
+    
+    top_brightness = np.mean(top_third)
+    middle_brightness = np.mean(middle_third)
+    bottom_brightness = np.mean(bottom_third)
+    
+    # نسبت روشنایی به کار می‌رود برای تخمین شکل
+    top_ratio = top_brightness / middle_brightness
+    bottom_ratio = bottom_brightness / middle_brightness
+    
+    # تنظیم پهنای بخش‌های مختلف صورت براساس روشنایی
     aspect_ratio = w / h if h > 0 else 1.0
     
-    if aspect_ratio > 1.05:  # صورت پهن
-        forehead_width = w * 0.75
-        cheek_width = w * 0.85
-        jaw_width = w * 0.7
-    elif aspect_ratio < 0.95:  # صورت کشیده
-        forehead_width = w * 0.6
-        cheek_width = w * 0.7
-        jaw_width = w * 0.65
-    else:  # صورت متعادل
-        forehead_width = w * 0.7
-        cheek_width = w * 0.75
-        jaw_width = w * 0.7
+    # تنظیم پویای مقادیر
+    forehead_width_factor = 0.7 + (top_ratio - 1) * 0.1
+    forehead_width_factor = max(0.5, min(0.9, forehead_width_factor))
     
-    # محاسبه موقعیت‌های افقی
+    cheekbone_width_factor = 0.75
+    
+    jaw_width_factor = 0.7 + (bottom_ratio - 1) * 0.1
+    jaw_width_factor = max(0.55, min(0.85, jaw_width_factor))
+    
+    # محاسبه پهنای بخش‌های مختلف چهره
+    forehead_width = w * forehead_width_factor
+    cheekbone_width = w * cheekbone_width_factor
+    jaw_width = w * jaw_width_factor
+    
+    # موقعیت افقی
     forehead_left = x + (w - forehead_width) / 2
     forehead_right = forehead_left + forehead_width
     
-    cheek_left = x + (w - cheek_width) / 2
-    cheek_right = cheek_left + cheek_width
+    cheek_left = x + (w - cheekbone_width) / 2
+    cheek_right = cheek_left + cheekbone_width
     
     jaw_left = x + (w - jaw_width) / 2
     jaw_right = jaw_left + jaw_width
     
-    # ساخت آرایه نقاط کلیدی
+    # ساخت نقاط کلیدی
     landmarks = np.array([
         [forehead_left, forehead_y],    # 0: گوشه بالا چپ پیشانی
         [x + w/2, y + h * 0.05],        # 1: وسط پیشانی
@@ -276,114 +300,17 @@ def _generate_default_landmarks(face_coordinates: Dict[str, int]) -> np.ndarray:
         [cheek_right, middle_y]         # 8: گونه راست
     ])
     
+    # لاگ مقادیر محاسبه شده برای اشکال‌زدایی
+    forehead_to_cheekbone = forehead_width / cheekbone_width
+    cheekbone_to_jaw = cheekbone_width / jaw_width
+    
+    logger.debug(f"نقاط کلیدی پویا: نسبت پیشانی به گونه: {forehead_to_cheekbone:.2f}")
+    logger.debug(f"نقاط کلیدی پویا: نسبت گونه به فک: {cheekbone_to_jaw:.2f}")
+    
     return landmarks
 
-def _generate_dynamic_landmarks(image: np.ndarray, face_coordinates: Dict[str, int]) -> np.ndarray:
-    """
-    تولید نقاط کلیدی پویا براساس محتوای تصویر و مختصات چهره.
-    جایگزین تابع _generate_default_landmarks
-    
-    Args:
-        image: تصویر OpenCV
-        face_coordinates: مختصات چهره
-        
-    Returns:
-        numpy.ndarray: نقاط کلیدی پویا
-    """
-    x, y, w, h = face_coordinates["x"], face_coordinates["y"], face_coordinates["width"], face_coordinates["height"]
-    
-    # لاگ کردن محدوده چهره برای اشکال‌زدایی
-    logger.debug(f"تولید نقاط کلیدی پویا برای چهره در محدوده: x={x}, y={y}, w={w}, h={h}")
-    
-    # محاسبه نسبت ابعاد چهره برای بهبود تشخیص
-    aspect_ratio = face_coordinates.get("aspect_ratio", w / h if h > 0 else 1.0)
-    logger.debug(f"نسبت ابعاد چهره: {aspect_ratio:.2f}")
-    
-    # برش تصویر چهره برای آنالیز
-    face_img = image[y:y+h, x:x+w]
-    gray_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY) if len(face_img.shape) == 3 else face_img
-    
-    # استفاده از هیستوگرام برای تشخیص روشنایی نواحی مختلف
-    # تقسیم تصویر به 3 بخش عمودی
-    h_face, w_face = gray_face.shape
-    top_region = gray_face[0:int(h_face*0.33), :]
-    middle_region = gray_face[int(h_face*0.33):int(h_face*0.66), :]
-    bottom_region = gray_face[int(h_face*0.66):, :]
-    
-    # محاسبه میانگین روشنایی هر ناحیه
-    top_brightness = np.mean(top_region)
-    middle_brightness = np.mean(middle_region)
-    bottom_brightness = np.mean(bottom_region)
-    
-    # تنظیم نسبت‌های پویا بر اساس شکل و روشنایی
-    # پارامترهای تشخیص شکل چهره
-    if aspect_ratio > 1.1:  # چهره پهن
-        width_ratio = 0.8
-        forehead_ratio = 1.0 + (top_brightness / middle_brightness - 1) * 0.2
-        jaw_ratio = 1.0 + (bottom_brightness / middle_brightness - 1) * 0.2
-        logger.debug("تشخیص چهره پهن")
-    elif aspect_ratio < 0.9:  # چهره کشیده
-        width_ratio = 0.65
-        forehead_ratio = 0.95 + (top_brightness / middle_brightness - 1) * 0.1
-        jaw_ratio = 0.95 + (bottom_brightness / middle_brightness - 1) * 0.1
-        logger.debug("تشخیص چهره کشیده")
-    else:  # چهره متعادل
-        width_ratio = 0.7
-        forehead_ratio = 1.0 + (top_brightness / middle_brightness - 1) * 0.15
-        jaw_ratio = 1.0 + (bottom_brightness / middle_brightness - 1) * 0.15
-        logger.debug("تشخیص چهره متعادل")
-    
-    # محدود کردن مقادیر به بازه منطقی
-    forehead_ratio = max(0.9, min(1.2, forehead_ratio))
-    jaw_ratio = max(0.8, min(1.2, jaw_ratio))
-    
-    # محاسبه مختصات نقاط کلیدی
-    # موقعیت‌های عمودی
-    forehead_y = y + int(h * 0.15)   # خط پیشانی
-    middle_y = y + int(h * 0.5)      # خط میانی
-    jawline_y = y + int(h * 0.75)    # خط فک
-    chin_y = y + int(h * 0.9)        # خط چانه
-    
-    # عرض در هر ارتفاع
-    forehead_width = w * width_ratio * forehead_ratio
-    cheek_width = w * width_ratio
-    jaw_width = w * width_ratio * jaw_ratio
-    
-    # محاسبه موقعیت‌های افقی
-    forehead_left = x + (w - forehead_width) / 2
-    forehead_right = forehead_left + forehead_width
-    
-    cheek_left = x + (w - cheek_width) / 2
-    cheek_right = cheek_left + cheek_width
-    
-    jaw_left = x + (w - jaw_width) / 2
-    jaw_right = jaw_left + jaw_width
-    
-    # ساخت آرایه نقاط کلیدی
-    landmarks = np.array([
-        [forehead_left, forehead_y],  # 0: گوشه بالا چپ پیشانی
-        [x + w/2, y + h * 0.05],      # 1: وسط پیشانی
-        [forehead_right, forehead_y],  # 2: گوشه بالا راست پیشانی
-        [jaw_left, jawline_y],        # 3: گوشه چپ فک
-        [x + w/2, chin_y],            # 4: چانه
-        [jaw_right, jawline_y],       # 5: گوشه راست فک
-        [cheek_left, middle_y],       # 6: گونه چپ
-        [x + w/2, middle_y],          # 7: وسط صورت
-        [cheek_right, middle_y]       # 8: گونه راست
-    ])
-    
-    # محاسبه نسبت‌های مهم برای استفاده در تشخیص شکل چهره
-    forehead_width_calc = np.linalg.norm(landmarks[0] - landmarks[2])
-    cheekbone_width = np.linalg.norm(landmarks[6] - landmarks[8])
-    jawline_width = np.linalg.norm(landmarks[3] - landmarks[5])
-    
-    forehead_to_cheekbone = forehead_width_calc / cheekbone_width if cheekbone_width > 0 else 1.0
-    cheekbone_to_jaw = cheekbone_width / jawline_width if jawline_width > 0 else 1.0
-    
-    logger.debug(f"نسبت عرض پیشانی به عرض گونه (پویا): {forehead_to_cheekbone:.2f}")
-    logger.debug(f"نسبت عرض گونه به عرض فک (پویا): {cheekbone_to_jaw:.2f}")
-    
-    return landmarks
+
+
 
 def get_face_image(image: np.ndarray) -> Tuple[bool, Dict[str, Any], Optional[np.ndarray]]:
     """
