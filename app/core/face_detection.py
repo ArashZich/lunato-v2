@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Dict, Any, Tuple, List, Optional
 import mediapipe as mp
+from datetime import datetime
 
 from app.config import settings
 
@@ -98,9 +99,13 @@ def detect_face(image: np.ndarray) -> Dict[str, Any]:
         # تبدیل تصویر به سیاه و سفید برای تشخیص بهتر
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
+        # افزایش کنتراست تصویر برای تشخیص بهتر
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced_gray = clahe.apply(gray)
+        
         # تشخیص چهره
         faces = face_cascade.detectMultiScale(
-            gray,
+            enhanced_gray,
             scaleFactor=1.1,
             minNeighbors=5,
             minSize=(30, 30),
@@ -166,11 +171,10 @@ def detect_face_landmarks(image: np.ndarray, face_coordinates: Dict[str, int]) -
         x, y, w, h = face_coordinates["x"], face_coordinates["y"], face_coordinates["width"], face_coordinates["height"]
         
         try:
-            import mediapipe as mp
             mp_face_mesh = mp.solutions.face_mesh
             
-            # برش چهره با حاشیه
-            padding = int(w * 0.1)
+            # برش چهره با حاشیه بزرگتر
+            padding = int(w * 0.3)  # افزایش حاشیه به 30%
             x1 = max(0, x - padding)
             y1 = max(0, y - padding)
             x2 = min(image.shape[1], x + w + padding)
@@ -180,11 +184,22 @@ def detect_face_landmarks(image: np.ndarray, face_coordinates: Dict[str, int]) -
             # تبدیل به RGB
             rgb_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
             
+            # بهبود کنتراست برای تشخیص بهتر
+            try:
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                lab = cv2.cvtColor(rgb_face, cv2.COLOR_RGB2LAB)
+                lab_planes = cv2.split(lab)
+                lab_planes[0] = clahe.apply(lab_planes[0])
+                lab = cv2.merge(lab_planes)
+                rgb_face = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+            except Exception as e:
+                logger.warning(f"خطا در بهبود کنتراست تصویر: {str(e)}")
+            
             with mp_face_mesh.FaceMesh(
                 static_image_mode=True,
                 max_num_faces=1,
                 refine_landmarks=True,
-                min_detection_confidence=0.5) as face_mesh:
+                min_detection_confidence=0.6) as face_mesh:
                 
                 results = face_mesh.process(rgb_face)
                 
@@ -194,23 +209,22 @@ def detect_face_landmarks(image: np.ndarray, face_coordinates: Dict[str, int]) -
                     # تبدیل مختصات نسبی به مختصات مطلق
                     face_height, face_width = face_img.shape[:2]
                     
-                    # انتخاب نقاط کلیدی متناسب با مدل mediapipe
-                    # نقاط اصلی برای تعیین شکل صورت
+                    # استفاده از نقاط کلیدی بهتر برای تعیین شکل چهره
                     selected_landmarks = np.array([
-                        # پیشانی
-                        [(landmarks[10].x * face_width + x1), (landmarks[10].y * face_height + y1)],  # پیشانی چپ
-                        [(landmarks[8].x * face_width + x1), (landmarks[8].y * face_height + y1 - h*0.1)],  # وسط پیشانی (بالاتر)
-                        [(landmarks[338].x * face_width + x1), (landmarks[338].y * face_height + y1)],  # پیشانی راست
+                        # پیشانی - استفاده از نقاط پهن‌تر
+                        [(landmarks[70].x * face_width + x1), (landmarks[70].y * face_height + y1)],   # پیشانی چپ
+                        [(landmarks[8].x * face_width + x1), (landmarks[8].y * face_height + y1)],     # وسط پیشانی
+                        [(landmarks[300].x * face_width + x1), (landmarks[300].y * face_height + y1)], # پیشانی راست
                         
-                        # فک
-                        [(landmarks[149].x * face_width + x1), (landmarks[149].y * face_height + y1)],  # فک چپ
-                        [(landmarks[152].x * face_width + x1), (landmarks[152].y * face_height + y1)],  # چانه
-                        [(landmarks[378].x * face_width + x1), (landmarks[378].y * face_height + y1)],  # فک راست
+                        # فک - استفاده از نقاط دقیق‌تر برای تشخیص عرض فک
+                        [(landmarks[172].x * face_width + x1), (landmarks[172].y * face_height + y1)],   # فک چپ
+                        [(landmarks[152].x * face_width + x1), (landmarks[152].y * face_height + y1)],   # چانه
+                        [(landmarks[397].x * face_width + x1), (landmarks[397].y * face_height + y1)],   # فک راست
                         
-                        # گونه‌ها
-                        [(landmarks[116].x * face_width + x1), (landmarks[116].y * face_height + y1)],  # گونه چپ
-                        [(landmarks[168].x * face_width + x1), (landmarks[168].y * face_height + y1)],  # بینی (وسط)
-                        [(landmarks[345].x * face_width + x1), (landmarks[345].y * face_height + y1)]   # گونه راست
+                        # گونه‌ها - استفاده از نقاط استخوان گونه
+                        [(landmarks[234].x * face_width + x1), (landmarks[234].y * face_height + y1)],   # گونه چپ
+                        [(landmarks[1].x * face_width + x1), (landmarks[1].y * face_height + y1)],       # بینی (وسط)
+                        [(landmarks[454].x * face_width + x1), (landmarks[454].y * face_height + y1)]    # گونه راست
                     ])
                     
                     logger.info(f"تشخیص {len(selected_landmarks)} نقطه کلیدی با استفاده از mediapipe")
@@ -225,57 +239,23 @@ def detect_face_landmarks(image: np.ndarray, face_coordinates: Dict[str, int]) -
     except Exception as e:
         logger.error(f"خطا در تشخیص نقاط کلیدی چهره: {str(e)}")
         return _generate_dynamic_landmarks(image, face_coordinates)
-    
+
 
 def _generate_dynamic_landmarks(image: np.ndarray, face_coordinates: Dict[str, int]) -> np.ndarray:
-    """تولید نقاط کلیدی پویا"""
+    """تولید نقاط کلیدی پویا با دقت بیشتر"""
     x, y, w, h = face_coordinates["x"], face_coordinates["y"], face_coordinates["width"], face_coordinates["height"]
     
     # موقعیت‌های عمودی
     forehead_y = y + h * 0.15
+    eye_y = y + h * 0.3
     middle_y = y + h * 0.5
     jawline_y = y + h * 0.75
     chin_y = y + h * 0.9
     
-    # تصویر چهره را برش بزنیم
-    face_img = image[y:y+h, x:x+w]
-    
-    # تبدیل به سیاه و سفید
-    if len(face_img.shape) == 3:
-        gray_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-    else:
-        gray_face = face_img
-    
-    # میانگین روشنایی قسمت‌های مختلف صورت
-    height, width = gray_face.shape
-    top_third = gray_face[:int(height/3), :]
-    middle_third = gray_face[int(height/3):int(2*height/3), :]
-    bottom_third = gray_face[int(2*height/3):, :]
-    
-    top_brightness = np.mean(top_third)
-    middle_brightness = np.mean(middle_third)
-    bottom_brightness = np.mean(bottom_third)
-    
-    # نسبت روشنایی به کار می‌رود برای تخمین شکل
-    top_ratio = top_brightness / middle_brightness
-    bottom_ratio = bottom_brightness / middle_brightness
-    
-    # تنظیم پهنای بخش‌های مختلف صورت براساس روشنایی
-    aspect_ratio = w / h if h > 0 else 1.0
-    
-    # تنظیم پویای مقادیر
-    forehead_width_factor = 0.7 + (top_ratio - 1) * 0.1
-    forehead_width_factor = max(0.5, min(0.9, forehead_width_factor))
-    
-    cheekbone_width_factor = 0.75
-    
-    jaw_width_factor = 0.7 + (bottom_ratio - 1) * 0.1
-    jaw_width_factor = max(0.55, min(0.85, jaw_width_factor))
-    
-    # محاسبه پهنای بخش‌های مختلف چهره
-    forehead_width = w * forehead_width_factor
-    cheekbone_width = w * cheekbone_width_factor
-    jaw_width = w * jaw_width_factor
+    # تنظیم پهنای بخش‌های مختلف صورت با نسبت‌های واقعی‌تر
+    forehead_width = w * 0.85  # افزایش عرض پیشانی
+    cheekbone_width = w * 0.9
+    jaw_width = w * 0.85  # افزایش عرض فک
     
     # موقعیت افقی
     forehead_left = x + (w - forehead_width) / 2
@@ -300,16 +280,76 @@ def _generate_dynamic_landmarks(image: np.ndarray, face_coordinates: Dict[str, i
         [cheek_right, middle_y]         # 8: گونه راست
     ])
     
-    # لاگ مقادیر محاسبه شده برای اشکال‌زدایی
+    # لاگ نسبت‌های کلیدی برای اشکال‌زدایی
     forehead_to_cheekbone = forehead_width / cheekbone_width
     cheekbone_to_jaw = cheekbone_width / jaw_width
     
-    logger.debug(f"نقاط کلیدی پویا: نسبت پیشانی به گونه: {forehead_to_cheekbone:.2f}")
-    logger.debug(f"نقاط کلیدی پویا: نسبت گونه به فک: {cheekbone_to_jaw:.2f}")
+    logger.info(f"نقاط کلیدی پویا: نسبت پیشانی به گونه: {forehead_to_cheekbone:.2f}")
+    logger.info(f"نقاط کلیدی پویا: نسبت گونه به فک: {cheekbone_to_jaw:.2f}")
     
     return landmarks
 
 
+def visualize_landmarks(image: np.ndarray, landmarks: np.ndarray, face_shape: str = None) -> np.ndarray:
+    """
+    نمایش نقاط کلیدی روی تصویر برای بررسی صحت
+    """
+    img_copy = image.copy()
+    
+    # نمایش نقاط کلیدی
+    for i, (x, y) in enumerate(landmarks):
+        cv2.circle(img_copy, (int(x), int(y)), 5, (0, 255, 0), -1)
+        cv2.putText(img_copy, str(i), (int(x)+5, int(y)-5), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+    
+    # نمایش خطوط مهم
+    # پیشانی
+    cv2.line(img_copy, (int(landmarks[0][0]), int(landmarks[0][1])), 
+             (int(landmarks[2][0]), int(landmarks[2][1])), (255, 0, 0), 2)
+    
+    # فک
+    cv2.line(img_copy, (int(landmarks[3][0]), int(landmarks[3][1])), 
+             (int(landmarks[5][0]), int(landmarks[5][1])), (0, 0, 255), 2)
+    
+    # گونه‌ها
+    cv2.line(img_copy, (int(landmarks[6][0]), int(landmarks[6][1])), 
+             (int(landmarks[8][0]), int(landmarks[8][1])), (255, 255, 0), 2)
+    
+    # اضافه کردن متن شکل چهره
+    if face_shape:
+        cv2.putText(img_copy, f"Face Shape: {face_shape}", (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+    
+    return img_copy
+
+
+def preprocess_image_for_face_detection(image: np.ndarray) -> np.ndarray:
+    """
+    پیش‌پردازش تصویر برای تشخیص بهتر چهره
+    """
+    # تغییر اندازه تصویر اگر خیلی بزرگ است
+    max_dim = 1200
+    h, w = image.shape[:2]
+    
+    if max(h, w) > max_dim:
+        scale = max_dim / max(h, w)
+        new_size = (int(w * scale), int(h * scale))
+        image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
+        
+    # تبدیل به سیاه و سفید برای تشخیص بهتر
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    # بهبود کنتراست
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    
+    # کاهش نویز
+    denoised = cv2.fastNlMeansDenoising(enhanced, h=10)
+    
+    # تبدیل به BGR
+    processed = cv2.cvtColor(denoised, cv2.COLOR_GRAY2BGR)
+    
+    return processed
 
 
 def get_face_image(image: np.ndarray) -> Tuple[bool, Dict[str, Any], Optional[np.ndarray]]:
@@ -336,8 +376,11 @@ def get_face_image(image: np.ndarray) -> Tuple[bool, Dict[str, Any], Optional[np
                 "message": "تصویر با کیفیت مناسبی برای تشخیص چهره ندارد (ابعاد خیلی کوچک)"
             }, None
             
+        # پیش‌پردازش تصویر برای تشخیص بهتر
+        processed_image = preprocess_image_for_face_detection(image)
+            
         # تشخیص چهره
-        detection_result = detect_face(image)
+        detection_result = detect_face(processed_image)
         
         if not detection_result.get("success", False):
             logger.warning(f"تشخیص چهره ناموفق بود: {detection_result.get('message', 'دلیل نامشخص')}")
