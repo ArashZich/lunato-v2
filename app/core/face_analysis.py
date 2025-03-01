@@ -364,162 +364,89 @@ def generate_full_analysis(image: np.ndarray, face_coordinates: Dict[str, int]) 
         }
 
 
-def _determine_face_shape(metrics: Dict[str, float], bias: Dict[str, float] = None) -> str:
+def _determine_face_shape(metrics: Dict[str, float]) -> str:
     """
-    تعیین شکل چهره براساس نسبت‌های هندسی با معیارهای دقیق‌تر.
+    تعیین شکل چهره براساس نسبت‌های هندسی با استفاده از فرمول دقیق.
     
     Args:
         metrics: مقادیر محاسبه شده نسبت‌های هندسی
-        bias: پارامترهای اریب برای هر شکل چهره (اختیاری)
         
     Returns:
         str: شکل چهره تشخیص داده شده
     """
+    # استخراج مقادیر از metrics
     width_to_length = metrics["width_to_length_ratio"]
     cheekbone_to_jaw = metrics["cheekbone_to_jaw_ratio"] 
     forehead_to_cheekbone = metrics["forehead_to_cheekbone_ratio"]
     jaw_angle = metrics["jaw_angle"]
     
-    # مقادیر پیش‌فرض اریب
-    if bias is None:
-        bias = {
-            "OVAL": 1.3,    # افزایش اریب برای چهره بیضی
-            "ROUND": 1.0,
-            "SQUARE": 1.0,
-            "HEART": 0.9,
-            "OBLONG": 0.9,
-            "DIAMOND": 0.3,  # کاهش شدید اریب برای لوزی
-            "TRIANGLE": 0.9
-        }
-    
     # لاگ کردن مقادیر محاسبه شده برای اشکال‌زدایی
     logger.info(f"نسبت‌های محاسبه شده برای تشخیص شکل چهره:")
-    logger.info(f"نسبت عرض به طول: {width_to_length:.2f}")
-    logger.info(f"نسبت گونه به فک: {cheekbone_to_jaw:.2f}")
-    logger.info(f"نسبت پیشانی به گونه: {forehead_to_cheekbone:.2f}")
-    logger.info(f"زاویه فک: {jaw_angle:.2f} درجه")
+    logger.info(f"نسبت عرض به طول: {width_to_length}")
+    logger.info(f"نسبت گونه به فک: {cheekbone_to_jaw}")
+    logger.info(f"نسبت پیشانی به گونه: {forehead_to_cheekbone}")
+    logger.info(f"زاویه فک: {jaw_angle} درجه")
     
-    # یک سیستم امتیازدهی متعادل‌تر برای تشخیص بهتر استفاده می‌کنیم
-    scores = {
-        "OVAL": 0,
-        "ROUND": 0,
-        "SQUARE": 0,
-        "HEART": 0,
-        "OBLONG": 0,
-        "DIAMOND": 0,
-        "TRIANGLE": 0
-    }
+    # تبدیل مقادیر به پارامترهای مورد نیاز فرمول
+    L = 1 / width_to_length  # طول صورت نسبت به عرض گونه‌ها
+    Wf = forehead_to_cheekbone  # عرض پیشانی نسبت به عرض گونه‌ها
+    Wc = 1.0  # عرض گونه‌ها (مقدار نرمالایز شده = 1)
+    Wj = 1 / cheekbone_to_jaw  # عرض فک نسبت به عرض گونه‌ها
     
-    # امتیازدهی برای صورت بیضی (OVAL)
-    if 0.75 <= width_to_length <= 0.9:
-        scores["OVAL"] += 3
-    if 0.85 < width_to_length <= 0.95:
-        scores["OVAL"] += 2
-    if 1.2 <= cheekbone_to_jaw <= 1.6:
-        scores["OVAL"] += 2
-    if 0.5 <= forehead_to_cheekbone <= 0.8:
-        scores["OVAL"] += 1
-    if 150 <= jaw_angle <= 170:
-        scores["OVAL"] += 1
+    logger.info(f"پارامترهای فرمول:")
+    logger.info(f"L (طول صورت): {L}")
+    logger.info(f"Wf (عرض پیشانی): {Wf}")
+    logger.info(f"Wc (عرض گونه‌ها): {Wc}")
+    logger.info(f"Wj (عرض فک): {Wj}")
     
-    # امتیازدهی برای صورت گرد (ROUND)
-    if width_to_length > 0.95:
-        scores["ROUND"] += 3
-    if 0.9 <= width_to_length <= 1.0:
-        scores["ROUND"] += 2
-    if 1.0 <= cheekbone_to_jaw <= 1.3:
-        scores["ROUND"] += 2
-    if forehead_to_cheekbone >= 0.8:
-        scores["ROUND"] += 1
-    if jaw_angle >= 160:
-        scores["ROUND"] += 2
-        
-    # امتیازدهی برای صورت مربعی (SQUARE)
-    if 0.9 <= width_to_length <= 1.0:
-        scores["SQUARE"] += 2
-    if 0.9 <= cheekbone_to_jaw <= 1.1:
-        scores["SQUARE"] += 3
-    if 0.7 <= forehead_to_cheekbone <= 0.9:
-        scores["SQUARE"] += 1
-    if jaw_angle <= 140:
-        scores["SQUARE"] += 3
-        
-    # امتیازدهی برای صورت قلبی (HEART)
-    if 0.75 <= width_to_length <= 0.9:
-        scores["HEART"] += 1
-    if forehead_to_cheekbone > 0.9:
-        scores["HEART"] += 3
-    if 1.3 <= cheekbone_to_jaw <= 1.8:
-        scores["HEART"] += 2
-    if 145 <= jaw_angle <= 155:
-        scores["HEART"] += 1
+    # محاسبه نسبت‌های فرمول
+    ratio_length_to_cheek = L / Wc  # نسبت طول صورت به عرض گونه
+    ratio_cheek_to_forehead = Wc / Wf  # نسبت عرض گونه به عرض پیشانی
+    ratio_cheek_to_jaw = Wc / Wj  # نسبت عرض گونه به عرض فک
     
-    # امتیازدهی برای صورت کشیده (OBLONG)
-    if width_to_length < 0.75:
-        scores["OBLONG"] += 4
-    if 0.75 <= width_to_length < 0.8:
-        scores["OBLONG"] += 2
-    if 1.0 <= cheekbone_to_jaw <= 1.5:
-        scores["OBLONG"] += 1
-    if 150 <= jaw_angle <= 170:
-        scores["OBLONG"] += 1
-        
-    # امتیازدهی برای صورت مثلثی (TRIANGLE)
-    if 0.8 <= width_to_length <= 0.9:
-        scores["TRIANGLE"] += 1
-    if cheekbone_to_jaw < 0.9:
-        scores["TRIANGLE"] += 4
-    if forehead_to_cheekbone < 0.5:
-        scores["TRIANGLE"] += 3
-    if jaw_angle <= 145:
-        scores["TRIANGLE"] += 1
-        
-    # امتیازدهی برای صورت لوزی (DIAMOND)
-    # بسیار دقیق‌تر و سخت‌گیرانه‌تر
-    if 0.8 <= width_to_length <= 0.9:
-        scores["DIAMOND"] += 1
-    else:
-        scores["DIAMOND"] -= 2  # کاهش امتیاز اگر نسبت عرض به طول در محدوده نیست
+    logger.info(f"نسبت‌های فرمول:")
+    logger.info(f"ratio_length_to_cheek: {ratio_length_to_cheek}")
+    logger.info(f"ratio_cheek_to_forehead: {ratio_cheek_to_forehead}")
+    logger.info(f"ratio_cheek_to_jaw: {ratio_cheek_to_jaw}")
     
-    # شرط اصلی و سخت‌گیرانه - صورت لوزی
-    if (1.9 <= cheekbone_to_jaw <= 2.3) and (0.15 <= forehead_to_cheekbone <= 0.3) and (130 <= jaw_angle <= 145):
-        scores["DIAMOND"] += 4
-        logger.info("شرایط دقیق DIAMOND برآورده شد")
-    elif (1.7 <= cheekbone_to_jaw <= 1.9) and (0.2 <= forehead_to_cheekbone <= 0.4) and (130 <= jaw_angle <= 150):
-        scores["DIAMOND"] += 2
-    else:
-        scores["DIAMOND"] -= 2  # کاهش امتیاز اگر شرایط برآورده نشد
-
-    # اگر نسبت گونه به فک بیش از 2.3 باشد، این احتمالاً یک خطای محاسباتی است
-    if cheekbone_to_jaw > 2.3:
-        scores["DIAMOND"] -= 3
-        scores["OVAL"] += 2  # تقویت بیشتر OVAL به عنوان شکل پیش‌فرض معقول
-    
-    # اعمال اریب به امتیازات
-    for shape in scores:
-        scores[shape] = scores[shape] * bias[shape]
-    
-    # لاگ امتیازات برای اشکال‌زدایی
-    logger.info(f"امتیازات تشخیص شکل چهره: {scores}")
-    
-    # انتخاب شکل چهره با بیشترین امتیاز
-    face_shape = max(scores, key=scores.get)
-    logger.info(f"تشخیص شکل چهره: {face_shape}")
-    
-    # اگر امتیازات خیلی نزدیک به هم هستند، OVAL به عنوان پیش‌فرض
-    max_score = scores[face_shape]
-    has_close_competitor = False
-    
-    for shape, score in scores.items():
-        if shape != face_shape and score >= max_score - 1:
-            has_close_competitor = True
-            break
-    
-    if has_close_competitor and face_shape == "DIAMOND":
-        logger.info("امتیازات نزدیک به هم هستند، تغییر به شکل چهره پیش‌فرض: OVAL")
+    # بیضی (Oval)
+    if 1.3 < ratio_length_to_cheek < 1.6 and Wj < Wc and Wf < Wc:
+        logger.info("تشخیص شکل چهره: OVAL")
         return "OVAL"
     
-    return face_shape
+    # گرد (Round)
+    if 0.9 <= ratio_length_to_cheek <= 1.1 and Wj < Wc and Wf < Wc:
+        logger.info("تشخیص شکل چهره: ROUND")
+        return "ROUND"
+    
+    # مربعی (Square)
+    if 0.9 <= ratio_length_to_cheek <= 1.1 and abs(Wc - Wj) < 0.05 * Wc:
+        logger.info("تشخیص شکل چهره: SQUARE")
+        return "SQUARE"
+    
+    # مستطیلی (Oblong/Rectangular)
+    if ratio_length_to_cheek > 1.6 and abs(Wc - Wj) < 0.05 * Wc:
+        logger.info("تشخیص شکل چهره: OBLONG")
+        return "OBLONG"
+    
+    # قلبی (Heart)
+    if Wf > Wc and Wc > Wj and (Wf - Wj) > 0.15 * Wf:
+        logger.info("تشخیص شکل چهره: HEART")
+        return "HEART"
+    
+    # الماسی (Diamond)
+    if Wc > Wf and Wc > Wj and (Wf - Wj) < 0.1 * Wf:
+        logger.info("تشخیص شکل چهره: DIAMOND")
+        return "DIAMOND"
+    
+    # مثلثی (Triangle) - اضافه شده به فرمول اصلی
+    if Wj > Wc and Wc > Wf:
+        logger.info("تشخیص شکل چهره: TRIANGLE")
+        return "TRIANGLE"
+    
+    # اگر هیچکدام از شرایط بالا برقرار نباشد، به طور پیش‌فرض بیضی در نظر می‌گیریم
+    logger.info("تشخیص شکل چهره: OVAL (پیش‌فرض)")
+    return "OVAL"
 
 
 def log_face_metrics(metrics: Dict[str, float], face_shape: str = None, metrics_log_file: str = "face_metrics_log.csv"):
